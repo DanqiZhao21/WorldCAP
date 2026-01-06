@@ -1,0 +1,80 @@
+# python
+*.pyc
+**/__pycache__/
+.pytest_cache/*
+.pydevproject
+
+# IDE
+.vscode/*
+
+# Pip
+*.egg-info
+
+# files
+*.log
+*.pkl
+*.pcd
+
+nuplan/
+exp/
+dataset/
+ckpts/
+
+vis/
+extra_data/
+
+trans.sh
+
+# -------------------------
+# 临时/缓存文件
+# -------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# -------------------------
+# Python 虚拟环境
+# -------------------------
+.env
+.venv
+venv/
+wotenewnew/
+
+# -------------------------
+# 数据 & 输出文件夹
+# -------------------------
+EvaluationResult/
+trainingResult/
+extra_data/
+assets/
+nuplan-devkit/
+ControllerInTheLoop/
+
+# -------------------------
+# 模型文件
+# -------------------------
+*.ckpt
+*.pnj
+*.npy
+# -------------------------
+# Python 打包 / 构建文件
+# -------------------------
+*.egg-info/
+dist/
+build/
+*.egg
+
+# -------------------------
+# IDE / 编辑器文件
+# -------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# -------------------------
+# Jupyter Notebook checkpoints
+# -------------------------
+.ipynb_checkpoints/
