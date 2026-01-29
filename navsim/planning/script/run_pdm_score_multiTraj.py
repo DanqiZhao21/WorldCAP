@@ -102,7 +102,7 @@ def main(cfg: DictConfig) -> None:
             Final average score of valid results: {pdm_score_df['score'].mean()}.
             Results are stored in: {save_path / f"{timestamp}.csv"}.
     """)
-#FIXME:使用chache 版本的有点问题
+#FIXME:
 def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[Dict[str, Any]]:
     node_id = int(os.environ.get("NODE_RANK", 0))
     thread_id = str(uuid.uuid4())
@@ -178,7 +178,7 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
 
             # logger.info(f"Anchor save opts → dir: {anchor_save_dir}, name: {anchor_save_name}, overwrite: {anchor_overwrite}")
 
-            pdm_result, pdm_best_result, simulation_states_all_noHuman, pred_states_all_noHuman, best_pdm_idx,pred_idx, oncoming_mask_pred, oncoming_mask_best =pdm_score_multiTraj(
+            pdm_result, pdm_best_result, simulation_states_all_noHuman, pred_states_all_noHuman, best_pdm_idx,pred_idx =pdm_score_multiTraj(
                 metric_cache=metric_cache,
                 model_trajectories=agentout["trajectories"],
                 trajectory_Anchor=agentout["trajectoryAnchor"],
@@ -194,7 +194,7 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             scene = scene_loader.get_scene_from_token(token)
             logger.warning(f"----------- ☀️☀️☀️Agent for token {token}:")
 #PRINT           
-            human_traj = scene.get_future_trajectory()
+            # human_traj = scene.get_future_trajectory()
             # plot_bev_with_agent_and_simulation(
             #     scene,
             #     agent,
@@ -205,12 +205,12 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             #     simulation_state=simulation_states_all_noHuman,
             #     pdm_result_pred=pdm_result,
             #     pdm_result_best=pdm_best_result,
-            #     oncoming_mask_pred=oncoming_mask_pred,
-            #     oncoming_mask_best=oncoming_mask_best,
-            #     save_path="/home/zhaodanqi/clone/WoTE/EvaluationResult/bev0102",
+            #     # oncoming_mask_pred=oncoming_mask_pred,
+            #     # oncoming_mask_best=oncoming_mask_best,
+            #     save_path="/home/zhaodanqi/clone/WoTE/EvaluationResult/bev0109",
             #     file_name=f"{token}_bev.png"
             # )
-            logger.warning(f"----------- 🌈🌈🌈Agent for token {token}:")
+            # logger.warning(f"----------- 🌈🌈🌈Agent for token {token}:")
 #PRINT           
             
             score_row.update(asdict(pdm_result))

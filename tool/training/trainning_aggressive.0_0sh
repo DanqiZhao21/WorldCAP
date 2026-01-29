@@ -1,0 +1,210 @@
+#!/bin/bash
+export PYTHONPATH=/home/zhaodanqi/clone/WoTE/navsim:$PYTHONPATH
+export PYTHONPATH=/home/zhaodanqi/clone/WoTE/nuplan-devkit:$PYTHONPATH
+export CUDA_VISIBLE_DEVICES=1,2,3,4
+
+# #第1次训练
+# python ./navsim/planning/script/run_training.py \
+#  agent=WoTE_agent \
+#  agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+#  agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+#  agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+#  +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+#  agent.lr=1e-4 \
+#  agent.config.min_lr=1e-5 \
+#  agent.config.warmup_epochs=5 \
+#  use_cache_without_dataset=true \
+#  experiment_name=WoTE/default \
+#  scene_filter=navtrain \
+#  dataloader.params.batch_size=16 \
+#  trainer.params.max_epochs=20 \
+#  split=trainval \
+#  cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+#  agent.config.controller_injection_mode=attn \
+#  agent.config.controller_injection_strength=1.0 \
+#  agent.config.controller_inject_every_step=false
+
+
+
+#第6次训练 attn+noEveryStep+Aggressive
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=attn \
+ agent.config.controller_injection_strength=1.0 \
+ agent.config.controller_inject_every_step=true
+
+ #第7次训练film+noEveryStep+Aggressive
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=film \
+ agent.config.controller_injection_strength=1.0 \
+ agent.config.controller_inject_every_step=false
+
+ #第8次训练 film+noEveryStep+Aggressive
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=film \
+ agent.config.controller_injection_strength=1.0 \
+ agent.config.controller_inject_every_step=true
+
+
+
+#######################0.20.20.2
+
+
+#第1次训练
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=attn \
+ agent.config.controller_injection_strength=0.2 \
+ agent.config.controller_inject_every_step=false
+
+
+
+#第6次训练 attn+noEveryStep+Aggressive
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=attn \
+ agent.config.controller_injection_strength=0.2 \
+ agent.config.controller_inject_every_step=true
+
+ #第7次训练film+noEveryStep+Aggressive
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=film \
+ agent.config.controller_injection_strength=0.2 \
+ agent.config.controller_inject_every_step=false
+
+ #第8次训练 film+noEveryStep+Aggressive
+python ./navsim/planning/script/run_training.py \
+ agent=WoTE_agent \
+ agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+ agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+ agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+ +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+ agent.lr=1e-4 \
+ agent.config.min_lr=1e-5 \
+ agent.config.warmup_epochs=5 \
+ use_cache_without_dataset=true \
+ experiment_name=WoTE/default \
+ scene_filter=navtrain \
+ dataloader.params.batch_size=16 \
+ trainer.params.max_epochs=20 \
+ split=trainval \
+ cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+ agent.config.controller_injection_mode=film \
+ agent.config.controller_injection_strength=0.2 \
+ agent.config.controller_inject_every_step=true
+
+
+
+# python ./navsim/planning/script/run_training.py \
+#  agent=WoTE_agent \
+#  agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
+#  agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy \
+#  agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy \
+#  +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256.npy \
+#  agent.lr=1e-4 \
+#  agent.config.min_lr=1e-5 \
+#  agent.config.warmup_epochs=5 \
+#  use_cache_without_dataset=true \
+#  experiment_name=WoTE/default \
+#  scene_filter=navtrain \
+#  dataloader.params.batch_size=16 \
+#  trainer.params.max_epochs=20 \
+#  split=trainval \
+#  cache_path=${NAVSIM_EXP_ROOT}/training_cache_allWoteTarget_LQRstyleAggressive_0113 \
+#  simulator.tracker_style=aggressive \
+#  simulator.post_style=yaw_speed_extreme \
+#  simulator.post_params.heading_scale=1.0 \
+#  simulator.post_params.heading_bias=0 \
+#  simulator.post_params.speed_scale=1.0 \
+#  simulator.post_params.speed_bias=0 \
+#  simulator.post_params.noise_std=0 \
+#  agent.config.controller_injection_mode=film \
+#  agent.config.controller_injection_strength=0.2 \
+#  agent.config.controller_inject_every_step=true

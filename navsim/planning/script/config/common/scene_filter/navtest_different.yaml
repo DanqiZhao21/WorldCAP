@@ -1,0 +1,30 @@
+_target_: navsim.common.dataclasses.SceneFilter
+_convert_: 'all'
+
+num_history_frames: 4
+num_future_frames: 10
+frame_interval: 1
+has_route: true
+
+max_scenes: null
+# log_names:
+#   - '2021.05.25.15.59.03_veh-30_04463_04606'
+#   - '2021.09.29.19.02.14_veh-28_02451_02708'
+#   - '2021.05.25.14.16.10_veh-35_03373_03550'
+tokens:
+  - 'fd16b1d0d41352ee'
+  - '4a07defcfe7f57fb' #新ckpt的表现比旧的好
+  - '1b1f22e9af535f9f' #0.5
+  - '38878741cbee5e88' #0.0
+  - 'ab7d0c4a928e5ec9' #0.5
+  - '4b85f48b7172519f' #0.5
+  - 'fc4982439fef5cb2' #第165行
+  - '07b814bfc2fb565d'
+  - '679c8386480d5023'
+  - 'aea962fd9c025957' #第246行
+  - '74cf2bc3433f59dd' #第304行
+  - 'c917da347a6e5d6d'
+  - 'edb0dbd58be650f3'
+  - 'fe22e2c812e65096'
+  - '52761f4f68355373'
+  - '90dbd48d165958cc' #第402

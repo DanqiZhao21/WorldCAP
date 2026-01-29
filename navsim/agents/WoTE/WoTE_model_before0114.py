@@ -43,8 +43,8 @@ class WoTEModel(nn.Module):
                  config,
                 ):
         super().__init__()
-        # 保留配置以便运行期根据控制器执行轨迹重建目标（如 BEV 注入）
-        self._config = config
+    # 保留配置以便运行期根据控制器执行轨迹重建目标（如 BEV 注入）
+    self._config = config
 
         # Define constants as variables
         STATUS_ENCODING_INPUT_DIM = 4 + 2 + 2
@@ -241,144 +241,18 @@ class WoTEModel(nn.Module):
         self.controller_injection_strength = float(getattr(config, 'controller_injection_strength', 0.3))
         
         
-        # 多风格：使用现有单字段路径，支持目录或逗号列表；带权采样概率支持环境变量
-        self.controller_style_sampling = getattr(config, 'controller_style_sampling', 'per_batch')
-        raw_probs = getattr(config, 'controller_style_probs', None)
-        if raw_probs is None:
-            env_probs = os.environ.get('WOTE_STYLE_PROBS', None)
-            if env_probs:
-                try:
-                    raw_probs = [float(x) for x in env_probs.split(',')]
-                except Exception:
-                    raw_probs = None
-        self._controller_style_probs = None
-
-        ref_path_attr = getattr(config, 'controller_ref_traj_path', 
+        # 从 config 读取控制器参考/执行轨迹（可通过命令行覆盖）
+        ref_traj_path = getattr(config, 'controller_ref_traj_path', 
                     "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256_centered.npy")
-        exec_path_attr = getattr(config, 'controller_exec_traj_path', 
-                    "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchor_NavsimSimulation_256_3.npy")
-
-        def _to_paths(path_like):
-            # 直接列表/元组：按原样返回
-            if isinstance(path_like, (list, tuple)):
-                return list(path_like)
-            # 目录：收集所有 .npy
-            if isinstance(path_like, str) and os.path.isdir(path_like):
-                files = [os.path.join(path_like, f) for f in os.listdir(path_like) if f.endswith('.npy')]
-                files.sort()
-                return files
-            # 字符串列表格式：去掉包裹的 [] 并按逗号拆分
-            if isinstance(path_like, str):
-                s = path_like.strip()
-                if s.startswith('[') and s.endswith(']'):
-                    s = s[1:-1]
-                if ',' in s:
-                    parts = [p.strip().strip('"').strip("'") for p in s.split(',')]
-                    return [p for p in parts if p]
-                if s:
-                    return [s]
-            # 其他：封装为单元素列表
-            return [path_like]
-
-        exec_paths = _to_paths(exec_path_attr)
-        ref_paths = _to_paths(ref_path_attr)
-
-        self._exec_bank = {}
-        self._ref_bank = {}
-        self._exec_bank_src = {}
-        self._ref_bank_src = {}
-        self._style_names = {}
-
-        # 支持 .npz 大包：包含多个风格的执行轨迹与单一参考轨迹
-        try:
-            if (
-                isinstance(exec_paths, list)
-                and len(exec_paths) == 1
-                and isinstance(exec_paths[0], str)
-                and exec_paths[0].endswith('.npz')
-                and os.path.isfile(exec_paths[0])
-            ):
-                bundle_path = exec_paths[0]
-                data = np.load(bundle_path, allow_pickle=True)
-                exec_trajs = data.get('exec_trajs', None)  # [N, 256, 8, 3]
-                ref_traj_np = data.get('ref_traj', None)    # [256, 8, 3]
-                style_names = data.get('style_names', None) # optional: [N] names/labels
-                if exec_trajs is not None and ref_traj_np is not None:
-                    N = int(exec_trajs.shape[0])
-                    ref_tensor = torch.tensor(ref_traj_np, dtype=torch.float32)
-                    for i in range(N):
-                        key = f"style_{i}"
-                        self._exec_bank[key] = torch.tensor(exec_trajs[i], dtype=torch.float32)
-                        self._ref_bank[key] = ref_tensor
-                        self._exec_bank_src[key] = f"{bundle_path}::exec[{i}]"
-                        self._ref_bank_src[key] = f"{bundle_path}::ref"
-                        if style_names is not None and len(style_names) == N:
-                            try:
-                                self._style_names[key] = str(style_names[i])
-                            except Exception:
-                                pass
-                else:
-                    raise RuntimeError("Missing exec_trajs/ref_traj in bundle npz")
-            else:
-                # 旧逻辑：路径/目录/列表
-                for i, p in enumerate(exec_paths):
-                    key = f"style_{i}"
-                    self._exec_bank[key] = torch.tensor(np.load(p), dtype=torch.float32)
-                    self._exec_bank_src[key] = p
-                for j, k in enumerate(self._exec_bank.keys()):
-                    ref_idx = j if j < len(ref_paths) else 0
-                    ref_p = ref_paths[ref_idx]
-                    self._ref_bank[k] = torch.tensor(np.load(ref_p), dtype=torch.float32)
-                    self._ref_bank_src[k] = ref_p
-        except Exception as e:
-            print(f"⚠️ Controller bank load failed, fallback to single-file mode: {e}")
-            self._exec_bank.clear(); self._ref_bank.clear(); self._exec_bank_src.clear(); self._ref_bank_src.clear()
-            if isinstance(exec_path_attr, str) and os.path.isfile(exec_path_attr) and exec_path_attr.endswith('.npy'):
-                self._exec_bank['style_0'] = torch.tensor(np.load(exec_path_attr), dtype=torch.float32)
-                self._ref_bank['style_0'] = torch.tensor(np.load(ref_path_attr), dtype=torch.float32)
-                self._exec_bank_src['style_0'] = exec_path_attr
-                self._ref_bank_src['style_0'] = ref_path_attr
-
-        self._controller_style_keys = list(self._exec_bank.keys())
-        if len(self._controller_style_keys) > 0:
-            if raw_probs is not None and isinstance(raw_probs, (list, tuple)):
-                if len(raw_probs) == len(self._controller_style_keys):
-                    s = float(sum(raw_probs))
-                    self._controller_style_probs = [float(p)/s if s > 0 else 1.0/len(self._controller_style_keys) for p in raw_probs]
-                else:
-                    # 长度不匹配：退回均匀分布并提示
-                    print(f"⚠️ controller_style_probs length {len(raw_probs)} != {len(self._controller_style_keys)}, use uniform.")
-                    self._controller_style_probs = [1.0/len(self._controller_style_keys)]*len(self._controller_style_keys)
-            else:
-                self._controller_style_probs = [1.0/len(self._controller_style_keys)]*len(self._controller_style_keys)
-            import random
-            init_key = random.choices(self._controller_style_keys, weights=self._controller_style_probs, k=1)[0]
-            self._active_ref_trajs = self._ref_bank[init_key]
-            self._active_exec_trajs = self._exec_bank[init_key]
-            try:
-                src = self._exec_bank_src.get(init_key)
-                # If bundle source, simplify logging to bundle + style name/index
-                if isinstance(src, str) and '::' in src:
-                    bundle, rest = src.split('::', 1)
-                    style_label = self._style_names.get(init_key, None)
-                    # parse index from exec[...] if possible
-                    import re
-                    m = re.search(r"exec\[(\d+)\]", rest)
-                    idx_str = m.group(1) if m else init_key
-                    label_str = style_label if style_label is not None else idx_str
-                    print(
-                        f"💜 Loaded controller bundle {bundle}; styles={self._controller_style_keys}; initial={label_str} "
-                        f"|| mode {self.controller_injection_mode} || strength {self.controller_injection_strength} || every_step {self.controller_inject_every_step}"
-                    )
-                else:
-                    print(f"💜 Loaded controller styles: {self._controller_style_keys}; initial_active={init_key} || exec_path={src} || ref_path={self._ref_bank_src.get(init_key)}")
-            except Exception:
-                pass
-        else:
-            print(f"💜 controller_ref_traj_path is {ref_path_attr} || controller_exec_traj_path is {exec_path_attr} || mode {self.controller_injection_mode} || strength {self.controller_injection_strength} || every_step {self.controller_inject_every_step}")
-            self._active_ref_trajs = torch.tensor(np.load(ref_path_attr), dtype=torch.float32)
-            self._active_exec_trajs = torch.tensor(np.load(exec_path_attr), dtype=torch.float32)
-            self._controller_style_keys = []
+        exec_traj_path = getattr(config, 'controller_exec_traj_path', 
+                     "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchor_NavsimSimulation_256_3.npy")
+        print(f"💜💜💜controller_ref_traj_path is {ref_traj_path} || 💜💜💜controller_exec_traj_path is {exec_traj_path} || 💜💜💜controller_injection_mode is {self.controller_injection_mode} || 💜💜💜controller_injection_strength is {self.controller_injection_strength}controller_inject_every_step is {self.controller_inject_every_step}")
+        ref_trajs_np = np.load(ref_traj_path)   # shape (N, T, 3)
+        exec_trajs_np = np.load(exec_traj_path)
+        
+        self.register_buffer("ref_trajs_buffer", torch.tensor(ref_trajs_np, dtype=torch.float32))
+        self.register_buffer("exec_trajs_buffer", torch.tensor(exec_trajs_np, dtype=torch.float32))
+        #PRINT:
 
     def encode_traj_into_ego_feat(self, ego_status_feat: torch.Tensor, init_trajectory_anchor: torch.Tensor, batch_size: int):
         """
@@ -471,9 +345,6 @@ class WoTEModel(nn.Module):
         # Retrieve necessary variables from the previous intermediate results
         results = trajectory_outputs["results"]
         batch_size = trajectory_outputs["batch_size"]
-        # 多风格训练：按批次随机切换当前控制器风格（若已配置多个）
-        # 需在目标构建之前切换，使按概率选中的风格同时影响目标与注入
-        self._maybe_switch_controller_style_for_batch()
         # 若缓存仅提供基础 BEV 目标，则在运行期基于当前控制器执行轨迹重建具体的未来 BEV 目标
         self._compose_future_bev_targets_from_base(targets)
         # print(f"💜In extract_reward_feature : batch_size is {batch_size}")   
@@ -506,13 +377,13 @@ class WoTEModel(nn.Module):
         if (self.controller_injection_mode != 'none') and (self.controller_injection_strength > 0.0):
             # print(f"💜controller_injection_mode is {self.controller_injection_mode} || 💜controller_injection_strength is {self.controller_injection_strength}")
             
-            ref_traj = self._active_ref_trajs.to(flatten_bev_feature.device)  # shape e.g. (256, T, 3)
-            exec_traj = self._active_exec_trajs.to(flatten_bev_feature.device)
-            controller_embedding = self.controller_encoder(ref_traj, exec_traj)  # [256, 64]#per traj
+            ref_traj = self.ref_trajs_buffer.to(flatten_bev_feature.device)  # shape e.g. (256, T, 3)
+            exec_traj = self.exec_trajs_buffer.to(flatten_bev_feature.device)
+            controller_embedding = self.controller_encoder(ref_traj, exec_traj)  # [256, 64]
 
             controller_embedding = controller_embedding.unsqueeze(0).expand(batch_size, -1, -1)  # [B, 256, 64]
             ctrl_token = controller_embedding.reshape(batch_size * num_traj, self.controller_emb_dim)  # [B*256, 64]
-            ctrl_token = self.ctrl_proj(ctrl_token)  # [B*256, 256]#将ctrl的特征维度 proj成 64->256 维度了
+            ctrl_token = self.ctrl_proj(ctrl_token)  # [B*256, 256]
             ctrl_token = ctrl_token.unsqueeze(1).expand(-1, self.num_plan_queries, -1)  # [B*256, Nq, 256]
 
             # 初始融合：将控制器特征注入 BEV tokens（仅训练时）
@@ -1069,7 +940,7 @@ class WoTEModel(nn.Module):
             w[3] * torch.log(5 * S_TTC + 2 * S_COMFORT + 5 * S_EP)
         )
         return assembled_cost
-#ADD 
+
     #==================== Utilities for future BEV targets (runtime compose) ====================
     def _compose_future_bev_targets_from_base(self, targets: Dict[str, torch.Tensor]):
         """
@@ -1079,97 +950,41 @@ class WoTEModel(nn.Module):
         Produces: 'fut_bev_semantic_map' as stacked maps for sampled trajectories.
         """
         if targets is None:
-            print("👉👉👉targets is None")
             return
         if ("fut_bev_semantic_map" in targets) or ("fut_bev_semantic_map_base" not in targets):
-            print("👉👉👉targets already contain fut_bev_semantic_map or missing fut_bev_semantic_map_base")
             return
 
-        base_map: torch.Tensor = targets["fut_bev_semantic_map_base"]  # [H, W] 或 [B, H, W]
+        base_map: torch.Tensor = targets["fut_bev_semantic_map_base"]  # [H, W]
         sampled_idx = targets.get("sampled_trajs_index", None)
         frame_interval = targets.get("frame_interval", None)
         if sampled_idx is None or frame_interval is None:
-            print("👉👉👉targets missing sampled_trajs_index or frame_interval")
-            return  # 信息不足；保持原样
+            return  # insufficient info; leave as-is
 
-        # 规范类型
+        # normalize types
         if isinstance(sampled_idx, np.ndarray):
             sampled_idx = torch.from_numpy(sampled_idx)
         if not torch.is_tensor(sampled_idx):
             sampled_idx = torch.tensor(sampled_idx, dtype=torch.long)
-        sampled_idx = sampled_idx.to('cpu')
+        sampled_idx = sampled_idx.to(self.exec_trajs_buffer.device)
 
-        # 处理不同维度的 batch 索引
+        # exec_trajs_buffer: [N_anchors, T, 3]
+        try:
+            offsets = self.exec_trajs_buffer.index_select(0, sampled_idx)[:, int(frame_interval), :]
+        except Exception:
+            fi = int(frame_interval)
+            fi = max(0, min(fi, self.exec_trajs_buffer.shape[1] - 1))
+            offsets = self.exec_trajs_buffer.index_select(0, sampled_idx)[:, fi, :]
+
+        fut_maps = []
         device = base_map.device
-        # 归一化 frame_interval，支持标量或按 batch 提供
-        if torch.is_tensor(frame_interval):
-            fi_tensor = frame_interval.detach().cpu().long().view(-1)  # [B] 或 [1]
-        else:
-            fi_tensor = torch.tensor([int(frame_interval)], dtype=torch.long)
-        # 限制范围到 [0, T-1]
-        T = int(self._active_exec_trajs.shape[1])
-        fi_tensor = torch.clamp(fi_tensor, min=0, max=max(0, T - 1))
+        for off in offsets:
+            dx, dy, dyaw = float(off[0].item()), float(off[1].item()), float(off[2].item())
+            ego_box = [dx, dy, 0.0, 4.0, 2.0, 1.8, dyaw]
+            fut_map = self._add_ego_box_to_bev_map(base_map.clone(), ego_box)
+            fut_maps.append(fut_map.to(device))
 
-        # 单样本：sampled_idx 为 1D
-        if sampled_idx.ndim == 1:
-            # 单样本：K 个轨迹，frame_interval 取 fi_tensor[0]
-            fi = int(fi_tensor[0].item())
-            try:
-                offsets = self._active_exec_trajs.index_select(0, sampled_idx)[:, fi, :]
-            except Exception:
-                return
-            fut_maps = []
-            for off in offsets:
-                dx, dy, dyaw = float(off[0].item()), float(off[1].item()), float(off[2].item())
-                ego_box = [dx, dy, 0.0, 4.0, 2.0, 1.8, dyaw]
-                src_map = base_map.clone() if base_map.ndim == 2 else base_map[0].clone()
-                fut_map = self._add_ego_box_to_bev_map(src_map, ego_box)
-                fut_maps.append(fut_map.to(device))
-            if len(fut_maps) > 0:
-                targets["fut_bev_semantic_map"] = torch.stack(fut_maps).unsqueeze(0)  # [1, K, H, W]
-            return
-
-        # 批量：sampled_idx 为 [B, K]
-        if sampled_idx.ndim == 2:
-            B, K = sampled_idx.shape
-            # 对齐 base_map 维度
-            if base_map.ndim == 2:
-                base_map = base_map.unsqueeze(0).repeat(B, 1, 1)
-            fut_maps_batched = []  # [B, K, H, W]
-            # fi_tensor: [1] 或 [B]
-            if fi_tensor.numel() == 1:
-                fi_list = [int(fi_tensor[0].item())] * B
-            else:
-                # 若长度不匹配，回退到首元素
-                fi_list = [int(fi_tensor[min(b, fi_tensor.shape[0]-1)].item()) for b in range(B)]
-            # 限制范围
-            fi_list = [max(0, min(f, T - 1)) for f in fi_list]
-
-            for b in range(B):
-                idx_b = sampled_idx[b]
-                fi_b = fi_list[b]
-                try:
-                    offsets_b = self._active_exec_trajs.index_select(0, idx_b)[:, fi_b, :]
-                except Exception:
-                    return
-                fut_maps_b = []
-                for off in offsets_b:
-                    dx, dy, dyaw = float(off[0].item()), float(off[1].item()), float(off[2].item())
-                    ego_box = [dx, dy, 0.0, 4.0, 2.0, 1.8, dyaw]
-                    fut_map = self._add_ego_box_to_bev_map(base_map[b].clone(), ego_box)
-                    fut_maps_b.append(fut_map.to(device))
-                if len(fut_maps_b) > 0:
-                    fut_maps_batched.append(torch.stack(fut_maps_b))  # [K, H, W]
-                else:
-                    fut_maps_batched.append(torch.empty((K,) + base_map.shape[1:], device=device))
-
-            if len(fut_maps_batched) > 0:
-                fut_b = torch.stack(fut_maps_batched)  # [B, K, H, W]
-                targets["fut_bev_semantic_map"] = fut_b
-            return
-
-        # 其他不支持的形状：跳过
-        return
+        if len(fut_maps) > 0:
+            targets["fut_bev_semantic_map"] = torch.stack(fut_maps)  # [num_sampled, H, W]
 
     def _coords_to_pixel(self, coords: np.ndarray) -> np.ndarray:
         pixel_center = np.array([[0, self._config.bev_pixel_width / 2.0]])
@@ -1209,47 +1024,6 @@ class WoTEModel(nn.Module):
         bev_np = bev_semantic_map.cpu().numpy()
         bev_np[mask] = self._config.ego_box_map_idx
         return torch.tensor(bev_np, dtype=bev_semantic_map.dtype, device=bev_semantic_map.device)
-
-    #==================== Controller style switching ====================
-    def _maybe_switch_controller_style_for_batch(self):
-        """
-        Always select one controller style per batch using configured probabilities,
-        and set it active for both controller embedding and future BEV target composition.
-        """
-        if not hasattr(self, '_exec_bank') or not isinstance(getattr(self, '_exec_bank'), dict):
-            return
-        if len(self._exec_bank) == 0:
-            return
-
-        # 随机选择一个风格 key
-        import random
-        # 带权采样
-        key = random.choices(self._controller_style_keys, weights=self._controller_style_probs, k=1)[0]
-        self._active_exec_trajs = self._exec_bank[key]
-        self._active_ref_trajs = self._ref_bank[key]
-        try:
-            src = getattr(self, '_exec_bank_src', {}).get(key)
-            if isinstance(src, str) and '::' in src:
-                bundle, rest = src.split('::', 1)
-                import re
-                m = re.search(r"exec\[(\d+)\]", rest)
-                idx_str = m.group(1) if m else key
-                style_label = self._style_names.get(key, None)
-                label_str = style_label if style_label is not None else idx_str
-                print(
-                    f"💜 Switched controller style: {label_str} from bundle {bundle} "
-                    f" || 💜 idx-str is {idx_str} || 💜 mode={self.controller_injection_mode} "
-                    f"|| 💜 strength={self.controller_injection_strength} || 💜 every_step={self.controller_inject_every_step}"
-                )
-            else:
-                print(
-                    f"💜 Switched controller style for batch: {key} "
-                    f"(probs={self._controller_style_probs}) || mode={self.controller_injection_mode} "
-                    f"strength={self.controller_injection_strength} every_step={self.controller_inject_every_step} "
-                    f"|| exec_path={src} ref_path={getattr(self, '_ref_bank_src', {}).get(key)}"
-                )
-        except Exception:
-            pass
 
 class AgentHead(nn.Module):
     def __init__(

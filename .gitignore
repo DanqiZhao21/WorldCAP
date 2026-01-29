@@ -78,3 +78,10 @@ build/
 # Jupyter Notebook checkpoints
 # -------------------------
 .ipynb_checkpoints/
+
+
+# experiment artifacts
+*.csv
+*.npz
+ControllerExp/generated/
+tool/smalltool/*.csv

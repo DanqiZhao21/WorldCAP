@@ -32,6 +32,7 @@ import os
 from copy import deepcopy                          
 
 
+
 class WoTETargetBuilder(AbstractTargetBuilder):
     def __init__(self, 
                 trajectory_sampling: TrajectorySampling,
@@ -154,17 +155,18 @@ class WoTETargetBuilder(AbstractTargetBuilder):
         result["fut_agent_states"] = fut_agent_states
         result["fut_agent_labels"] = fut_agent_labels
 
-
-
         # =====================================================
         # 6. TODO:自己新增的一个：未来 BEV（无 ego、无 anchor）⭐关键==》 result["fut_bev_semantic_map"]还需要进一步完善
         # =====================================================
         # for map targets 这一步的ego_pose是当前帧的 应该是为了方便将整个图绘制在当前帧的ego-car坐标系下面
         ego_pose = StateSE2(*scene.frames[cur_map_index].ego_status.ego_pose)
         fut_bev_semantic_map = self._compute_bev_semantic_map(fut_anno_in_cur_frame, scene.map_api, ego_pose)
+        # 存储与控制器无关的基础未来 BEV 语义图（不包含 ego 注入）
         result["fut_bev_semantic_map_base"] = fut_bev_semantic_map
+        # 记录用于对齐的未来帧间隔，训练时再结合具体控制器执行轨迹进行注入
+        result["frame_interval"] = frame_interval
         
-        token = scene.frames[index].token
+        # token = scene.frames[index].token
         #FIXME:
         # save_dir = "/home/zhaodanqi/clone/WoTE/trainingResult/bev-pic-target"
         # os.makedirs(save_dir, exist_ok=True)
@@ -178,34 +180,17 @@ class WoTETargetBuilder(AbstractTargetBuilder):
         # plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
         # plt.close()  # 关闭 plt 避免弹窗
         # print("❤❤❤ 保存了bev-target 图片")
-
-        
-        # =====================================================
-        # 6. 未来 BEV（无 ego、无 anchor）⭐关键==》 result["fut_bev_semantic_map"]还需要进一步完善
-        # =====================================================
-        
+   
         fut_bev_semantic_map_list = []
         random_sample_idx = self.rng.choice(self.trajectory_anchors_all.shape[0], self.num_sampled_trajs, replace=False)#总共有256个anchor，送里面随机选几个anchor出来
         sampled_trajectory_anchors = self.trajectory_anchors_all[random_sample_idx]
 
         result["sampled_trajs_index"] = random_sample_idx
         
-#FIXME:=======================execute=======================
-        # cluster_file = self._config.cluster_file_path
-        # self.trajectory_anchors_all = np.load(cluster_file)
-        device = fut_bev_semantic_map.device 
-        cluster_file_exe="/home/zhaodanqi/clone/WoTE/extra_data/planning_vb/trajectory_exec_256.npy"
-        trajectory_anchors_all_exe=np.load(cluster_file_exe)
-        sampled_trajectory_anchors_exe = trajectory_anchors_all_exe[random_sample_idx]
-        for trajectory_anchors in sampled_trajectory_anchors_exe:#绘制不同自车在achor下前进后的状态
-            ref_frame_offset = trajectory_anchors[frame_interval]
-            fut_in_cur_frame_ego_box = [ref_frame_offset[0], ref_frame_offset[1], 0., 4.0, 2.0, 1.8, ref_frame_offset[2]]#（ref_frame_offset=[x,y,yaw])
-            fut_bev_semantic_map_cur = self._add_ego_box_to_bev_map(fut_bev_semantic_map.clone(), fut_in_cur_frame_ego_box)#这一步是把根据anchor的ego-car的未来状态绘制到bev semantic上
-            fut_bev_semantic_map_list.append(fut_bev_semantic_map_cur.to(device))
-            
-        result["fut_bev_semantic_map"] = torch.stack(fut_bev_semantic_map_list)#沿新的维度堆叠成一个 4D 张量：
-
+        # 不在缓存阶段注入控制器执行轨迹，以便缓存对各种控制器风格复用。
+        # 训练/评估阶段再根据提供的 controller_exec_traj_path 进行注入，避免重复构建缓存。
         return result
+        
 #FIXME:
     def transform_boxes_from_future_to_current_ego_frame(self, boxes_future: np.ndarray, points_rel: np.ndarray) -> np.ndarray:
         """
@@ -262,12 +247,13 @@ class WoTETargetBuilder(AbstractTargetBuilder):
             )
 
         for box, name in zip(annotations.boxes, annotations.names):
+            # 使用显式下划线枚举成员，避免类属性在索引中的不兼容
             box_x, box_y, box_heading, box_length, box_width = (
-                box[BoundingBoxIndex.X],
-                box[BoundingBoxIndex.Y],
-                box[BoundingBoxIndex.HEADING],
-                box[BoundingBoxIndex.LENGTH],
-                box[BoundingBoxIndex.WIDTH],
+                box[BoundingBoxIndex._X],
+                box[BoundingBoxIndex._Y],
+                box[BoundingBoxIndex._HEADING],
+                box[BoundingBoxIndex._LENGTH],
+                box[BoundingBoxIndex._WIDTH],
             )
 
             if name == "vehicle" and _xy_in_lidar(box_x, box_y, self._config):
@@ -282,7 +268,11 @@ class WoTETargetBuilder(AbstractTargetBuilder):
         agent_labels = np.zeros(max_agents, dtype=bool)
 
         if len(agents_states_arr) > 0:
-            distances = np.linalg.norm(agents_states_arr[..., BoundingBox2DIndex.POINT], axis=-1)
+            # 显式切片 X:Y+1，避免类属性 slice 的兼容问题
+            distances = np.linalg.norm(
+                agents_states_arr[..., slice(BoundingBox2DIndex._X, BoundingBox2DIndex._Y + 1)],
+                axis=-1,
+            )
             argsort = np.argsort(distances)[:max_agents]
 
             # filter detections

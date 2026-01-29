@@ -123,11 +123,12 @@ class WoTEConfig:
     num_traj_anchor: int = 256
     
     use_sim_reward: bool = True
+    #NOTE
     sim_reward_dict_path: str = f'/home/zhaodanqi/clone/WoTE/extra_data/planning_vb/formatted_pdm_score_256.npy'
-    cluster_file_path: str='/home/zhaodanqi/clone/WoTE/extra_data/planning_vb/trajectory_anchors_256.npy'
-    # Controller embedding references (make override-able via Hydra)
-    controller_ref_traj_path: str = '/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256_centered.npy'
-    controller_exec_traj_path: str = '/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/old/Anchor_NavsimSimulation_256_3.npy' ##仅仅训练的时候需要使用，尽心对比编码进入bev latent
+    cluster_file_path: str='/home/zhaodanqi/clone/WoTE/extra_data/planning_vb/trajectory_anchors_256.npy' #NOTE 这个一般也不变动
+    controller_ref_traj_path: str = "/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" #NOTE这个一般不变动
+    controller_exec_traj_path: str = "/home/zhaodanqi/clone/WoTE/ControllerExp/LAB0_Original/Anchor_NavsimSimulation_256_3.npy"
+    #NOTE
     num_plan_queries: int = 32
 
     use_agent_loss: bool = True
@@ -137,7 +138,7 @@ class WoTEConfig:
     use_focal_loss_for_map = True
     bev_semantic_weight: float = 10.0
     future_idx = 11
-    fut_bev_semantic_weight: float = 0.1
+    fut_bev_semantic_weight: float = 5.0
     focal_loss_alpha = 0.5
     focal_loss_gamma = 2.0
     
@@ -147,12 +148,13 @@ class WoTEConfig:
     # recurrent
     num_fut_timestep = 1
     use_traj_offset = True
-
+    #NOTE
     # controller fusion mode: 'film' | 'attn' | 'concat' | 'add'
-    controller_injection_mode: str = 'none'
+    controller_injection_mode: str = 'attn'
     controller_inject_every_step: bool = False
     # controller injection strength (0.0 ~ 1.0). Lower to avoid overpowering BEV.
-    controller_injection_strength: float = 0.3
+    controller_injection_strength: float = 1
+    #NOTE
     # optmizer
     use_coslr_opt = True
     lr_steps = [70] # not used
@@ -178,8 +180,8 @@ class WoTEConfig:
     im_loss_weight = 1.0
     metric_loss_weight = 1.0
 
-    def __post_init__(self):
-        # 默认让 cluster_file_path 与 controller_ref_traj_path 保持一致；
-        # 如需不同，可在 CLI 显式覆盖 cluster_file_path。
-        if self.cluster_file_path is None:
-            self.cluster_file_path = self.controller_ref_traj_path
+    # def __post_init__(self):
+    #     # 默认让 cluster_file_path 与 controller_ref_traj_path 保持一致；
+    #     # 如需不同，可在 CLI 显式覆盖 cluster_file_path。
+    #     if self.cluster_file_path is None:
+    #         self.cluster_file_path = self.controller_ref_traj_path

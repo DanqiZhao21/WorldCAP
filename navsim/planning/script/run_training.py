@@ -44,10 +44,8 @@ CONFIG_NAME = "default_training"
 
 class WandbModelArtifactCallback(Callback):
     """在保存 checkpoint 后，将模型 ckpt 作为 artifact 上传到 Weights & Biases。
-
     避免重复上传：内部维护已上传路径集合；每次验证结束检查最新路径。
     """
-
     def __init__(self, wandb_logger: WandbLogger):
         super().__init__()
         self._wandb_logger = wandb_logger

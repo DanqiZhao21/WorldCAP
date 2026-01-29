@@ -1,17 +1,17 @@
 #!/bin/bash
 export PYTHONPATH=/home/zhaodanqi/clone/WoTE/navsim:$PYTHONPATH
 export PYTHONPATH=/home/zhaodanqi/clone/WoTE/nuplan-devkit:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=1,2,3,4
+export CUDA_VISIBLE_DEVICES=1
 
 # 第1次训练 attn+noEveryStep+original
 python ./navsim/planning/script/run_training.py \
  agent=WoTE_agent \
  agent.config._target_=navsim.agents.WoTE.configs.default.WoTEConfig \
-  +agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256_centered.npy\
-  +agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Post20251220/LAB0_original/Anchor_NavsimSimulation_256_3.npy\
+  +agent.config.controller_ref_traj_path=/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256_centered.npy \
+  +agent.config.controller_exec_traj_path=/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_styles.npz \
   +agent.config.cluster_file_path=/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256.npy \
  agent.lr=1e-4 \
- agent.config.controller_injection_strength=0.0 \
+ agent.config.controller_injection_strength=1.0 \
  agent.config.min_lr=1e-5 \
  agent.config.warmup_epochs=5 \
  use_cache_without_dataset=true \

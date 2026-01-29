@@ -32,6 +32,7 @@ import os
 from copy import deepcopy                          
 
 
+
 class WoTETargetBuilder(AbstractTargetBuilder):
     def __init__(self, 
                 trajectory_sampling: TrajectorySampling,
@@ -154,15 +155,16 @@ class WoTETargetBuilder(AbstractTargetBuilder):
         result["fut_agent_states"] = fut_agent_states
         result["fut_agent_labels"] = fut_agent_labels
 
-
-
         # =====================================================
         # 6. TODO:自己新增的一个：未来 BEV（无 ego、无 anchor）⭐关键==》 result["fut_bev_semantic_map"]还需要进一步完善
         # =====================================================
         # for map targets 这一步的ego_pose是当前帧的 应该是为了方便将整个图绘制在当前帧的ego-car坐标系下面
         ego_pose = StateSE2(*scene.frames[cur_map_index].ego_status.ego_pose)
         fut_bev_semantic_map = self._compute_bev_semantic_map(fut_anno_in_cur_frame, scene.map_api, ego_pose)
-        # result["fut_bev_semantic_map_base"] = fut_bev_semantic_map
+        # 存储与控制器无关的基础未来 BEV 语义图（不包含 ego 注入）
+        result["fut_bev_semantic_map_base"] = fut_bev_semantic_map
+        # 记录用于对齐的未来帧间隔，训练时再结合具体控制器执行轨迹进行注入
+        result["frame_interval"] = frame_interval
         
         # token = scene.frames[index].token
         #FIXME:
@@ -185,77 +187,10 @@ class WoTETargetBuilder(AbstractTargetBuilder):
 
         result["sampled_trajs_index"] = random_sample_idx
         
-#FIXME:=======================execute=======================
-        # cluster_file = self._config.cluster_file_path
-        # self.trajectory_anchors_all = np.load(cluster_file)
-        device = fut_bev_semantic_map.device 
-        # 统一使用 WoTEConfig 中的 controller_exec_traj_path
-        cluster_file_exe = getattr(self._config, 'controller_exec_traj_path', 
-                       "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchor_NavsimSimulation_256_3.npy")
-        trajectory_anchors_all_exe = np.load(cluster_file_exe)
-        sampled_trajectory_anchors_exe = trajectory_anchors_all_exe[random_sample_idx]
-        for trajectory_anchors in sampled_trajectory_anchors_exe:#绘制不同自车在achor下前进后的状态
-            ref_frame_offset = trajectory_anchors[frame_interval]
-            fut_in_cur_frame_ego_box = [ref_frame_offset[0], ref_frame_offset[1], 0., 4.0, 2.0, 1.8, ref_frame_offset[2]]#（ref_frame_offset=[x,y,yaw])
-            fut_bev_semantic_map_cur = self._add_ego_box_to_bev_map(fut_bev_semantic_map.clone(), fut_in_cur_frame_ego_box)#这一步是把根据anchor的ego-car的未来状态绘制到bev semantic上
-            fut_bev_semantic_map_list.append(fut_bev_semantic_map_cur.to(device))
-            
-        result["fut_bev_semantic_map"] = torch.stack(fut_bev_semantic_map_list)#沿新的维度堆叠成一个 4D 张量：
-
+        # 不在缓存阶段注入控制器执行轨迹，以便缓存对各种控制器风格复用。
+        # 训练/评估阶段再根据提供的 controller_exec_traj_path 进行注入，避免重复构建缓存。
         return result
-    def compute_targets_partial(
-        self,
-        scene: Scene,
-        missing_keys: List[str],
-        cached_targets: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Compute only dynamic targets that cannot be cached.
-        Args:
-            scene: Scene object
-            missing_keys: list of keys to compute dynamically
-            cached_targets: cached static targets like 'fut_bev_semantic_map_base'
-        Returns:
-            Dict with newly computed dynamic targets
-        """
-        result: Dict[str, torch.Tensor] = {}
-
-        # 1. Compute sampled trajectory indices
-        if "sampled_trajs_index" in missing_keys:
-            random_sample_idx = self.rng.choice(
-                self.trajectory_anchors_all.shape[0], self.num_sampled_trajs, replace=False
-            )
-            result["sampled_trajs_index"] = random_sample_idx
-        else:
-            random_sample_idx = result.get("sampled_trajs_index", None)
-
-        # 2. Compute fut_bev_semantic_map using cached base map
-        if "fut_bev_semantic_map" in missing_keys:
-            fut_bev_semantic_map_list = []
-            base_map = cached_targets["fut_bev_semantic_map_base"]
-            # frame_interval 也可能需要从类属性或 scene 中获取
-            frame_interval = self.future_idx - self.slice_indices[0] - 1
-            cluster_file_exe = getattr(self._config, 'controller_exec_traj_path', 
-                                       "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchor_NavsimSimulation_256_3.npy")
-            trajectory_anchors_all_exe = np.load(cluster_file_exe)
-            sampled_trajectory_anchors_exe = trajectory_anchors_all_exe[random_sample_idx]
-
-            for trajectory_anchors in sampled_trajectory_anchors_exe:
-                ref_frame_offset = trajectory_anchors[frame_interval]
-                fut_in_cur_frame_ego_box = [
-                    ref_frame_offset[0], ref_frame_offset[1], 0., 4.0, 2.0, 1.8, ref_frame_offset[2]
-                ]
-                fut_bev_semantic_map_cur = self._add_ego_box_to_bev_map(
-                    base_map.clone(), fut_in_cur_frame_ego_box
-                )
-                fut_bev_semantic_map_list.append(fut_bev_semantic_map_cur.to(base_map.device))
-
-            result["fut_bev_semantic_map"] = torch.stack(fut_bev_semantic_map_list)
-
-        return result
-
         
-    
 #FIXME:
     def transform_boxes_from_future_to_current_ego_frame(self, boxes_future: np.ndarray, points_rel: np.ndarray) -> np.ndarray:
         """

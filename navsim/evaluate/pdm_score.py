@@ -197,39 +197,116 @@ def pdm_score_multiTraj(
     """
     # future_sampling=10 #新增————手动修改预测时长in simulation,每次只需要10帧，也就是未来5s
     initial_ego_state = metric_cache.ego_state
-    pdm_trajectory = metric_cache.trajectory#人类轨迹，为InterpolatedTrajectory对象
-    
-    all_pred_states = []
-    all_anchors_states = []
+    pdm_trajectory = metric_cache.trajectory  # 人类轨迹，为InterpolatedTrajectory对象
 
-    # ⚠️->🟢->🟣
-    # 转换每条 model_trajectory 为 array 并 rollout
-    # print(f"🟢lenth of moedl_traje is {len(model_trajectories)}")#256
+    # 将 human baseline 先转为数组，后续与每条预测拼接
+    pdm_states = get_trajectory_as_array(
+        pdm_trajectory, future_sampling, initial_ego_state.time_point
+    )  # (T, D)
+
+    # 逐轨评估：每次只给 [baseline, 当前预测] 两条，取索引1作为该预测分数
+    per_traj_scores: List[float] = []
+    per_traj_results: List[PDMResults] = []
+    per_traj_oncoming_masks: List[np.ndarray] = []
+    per_traj_oncoming_prog_vals: List[float | None] = []
+    pred_sim_states_list: List[np.ndarray] = []  # 每条预测的模拟结果 (T, D)
+    pred_input_states_list: List[np.ndarray] = []  # 每条预测的输入轨迹 (T, D)
+
     for traj in model_trajectories:
+        # 预测轨迹转为全局并插值到与仿真一致
+        pred_traj = transform_trajectory(traj, initial_ego_state)
+        pred_states = get_trajectory_as_array(
+            pred_traj, future_sampling, initial_ego_state.time_point
+        )  # (T, D)
 
-        #transform_trajectory函数功能：Transform trajectory in global frame and return as InterpolatedTrajectory
-        pred_traj = transform_trajectory(traj, initial_ego_state)#这个🟢pred_traj是插InterpolatedTrajectory对象：从ego_frame转化到global_frame;(ps:InterpolatedTrajectory这一步还没有进行插值,shape仍为（9,3））、
-        
-        pred_states = get_trajectory_as_array(pred_traj, future_sampling, initial_ego_state.time_point)#(41,11)完成了插值
-        # print(f"🦋shape of traj is {pred_states.shape}")#(41, 11)
-        all_pred_states.append(pred_states)#20
-        
-    # 🦊pdm_states's shape  is (41, 11)
-    pdm_states = get_trajectory_as_array(pdm_trajectory, future_sampling, initial_ego_state.time_point)
-    # print(f"🦋shape of pdm_states is f{pdm_states.shape}")#(41, 11)
-    trajectory_states = np.concatenate([pdm_states[None, ...]] + [s[None, ...] for s in all_pred_states], axis=0)
-    # print(f"🦋shape of trajectory_states is f{trajectory_states.shape}")#(257, 41, 11)
-    simulated_states_all = simulator.simulate_proposals(trajectory_states, initial_ego_state)#simulation的state轨迹 len=20
-    # print(f"🦋shape of simulated_states_all is f{simulated_states_all.shape}") #(257, 41, 11)[WoTE]
+        # 构造两条 proposal 的批次：[baseline, pred]
+        pair_states = np.concatenate([pdm_states[None, ...], pred_states[None, ...]], axis=0)
 
-    #NOTE global_traj_to_ego函数会去掉第一条pdm_traj
-    simulated_states_all_egoframe=global_traj_to_ego(simulated_states_all, initial_ego_state)
-    #NOTE输出没有包含第一条pdm_score即：人类轨迹了（在这个函数内部去掉了第一条）
-    all_pred_states_1 = np.array( trajectory_states)
-    pred_states_all_ego_frame=global_traj_to_ego(all_pred_states_1, initial_ego_state)
-    best_idx = int(np.argmax(model_scores))
-    pred_idx = best_idx + 1 
-    
+        # 仿真两条
+        pair_simulated = simulator.simulate_proposals(pair_states, initial_ego_state)  # (2, T, D)
+
+        # 评分两条
+        pair_scores = scorer.score_proposals(
+            pair_simulated,
+            metric_cache.observation,
+            metric_cache.centerline,
+            metric_cache.route_lane_ids,
+            metric_cache.drivable_area_map,
+        )
+
+        # 索引1为当前预测的结果
+        pred_idx_local = 1
+        score_pred = float(pair_scores[pred_idx_local])
+        per_traj_scores.append(score_pred)
+
+        # 提取各指标并打包为 PDMResults（与单轨一致）
+        no_at_fault_collisions = scorer._multi_metrics[MultiMetricIndex.NO_COLLISION, pred_idx_local]
+        drivable_area_compliance = scorer._multi_metrics[MultiMetricIndex.DRIVABLE_AREA, pred_idx_local]
+        driving_direction_compliance = scorer._multi_metrics[MultiMetricIndex.DRIVING_DIRECTION, pred_idx_local]
+        ego_progress = scorer._weighted_metrics[WeightedMetricIndex.PROGRESS, pred_idx_local]
+        time_to_collision_within_bound = scorer._weighted_metrics[WeightedMetricIndex.TTC, pred_idx_local]
+        comfort = scorer._weighted_metrics[WeightedMetricIndex.COMFORTABLE, pred_idx_local]
+        # try:
+        #     oncoming_progress_val = float(scorer._oncoming_progress_value[pred_idx_local])
+        # except Exception:
+        #     oncoming_progress_val = None
+
+        per_traj_results.append(
+            PDMResults(
+                no_at_fault_collisions,
+                drivable_area_compliance,
+                driving_direction_compliance,
+                ego_progress,
+                time_to_collision_within_bound,
+                comfort,
+                score_pred,
+                # oncoming_progress=oncoming_progress_val,
+            )
+        )
+
+        # 保存 oncoming mask（用于可视化）
+        # try:
+        #     oncoming_mask_pred = scorer._ego_areas[pred_idx_local, :, EgoAreaIndex.ONCOMING_TRAFFIC]
+        # except Exception:
+        #     oncoming_mask_pred = None
+        # per_traj_oncoming_masks.append(oncoming_mask_pred)
+        # per_traj_oncoming_prog_vals.append(oncoming_progress_val)
+
+        # 累积预测的仿真结果与输入轨迹（均不包含 baseline）
+        pred_sim_states_list.append(pair_simulated[pred_idx_local])  # (T, D)
+        pred_input_states_list.append(pair_states[pred_idx_local])  # (T, D)
+
+    # 模型选择的索引（基于模型打分）
+    best_idx_model = int(np.argmax(model_scores))
+    pred_idx = best_idx_model + 1  # 与历史约定保持“+1”代表跳过 baseline
+
+    # PDM 选择的最佳索引（逐轨独立评估之后的 PDM 分数）
+    best_pdm_no_offset = int(np.argmax(per_traj_scores))
+    best_pdm_idx = best_pdm_no_offset + 1  # 对齐“+1”约定
+
+    # # 打印对比日志
+    # chosen_score = per_traj_scores[best_idx_model]
+    # best_pdm_score = per_traj_scores[best_pdm_no_offset]
+    # # print(
+    # #     f"💚PDM_DEBUG_SELECT (per-traj) pred_idx={pred_idx} chosen_score={chosen_score:.4f} | "
+    # #     f"💚best_pdm_idx={best_pdm_idx} best_pdm_score={best_pdm_score:.4f}"
+    # # )
+
+    # 准备返回的两个结果：模型选择的、PDM 选择的
+    pdm_results = per_traj_results[best_idx_model]
+    pdm_best_results = per_traj_results[best_pdm_no_offset]
+
+    # Oncoming masks（模型选择 vs PDM 选择）
+    # oncoming_mask_pred = per_traj_oncoming_masks[best_idx_model]
+    # oncoming_mask_best = per_traj_oncoming_masks[best_pdm_no_offset]
+
+    # 聚合所有预测的仿真与输入（不含 baseline），并转到 ego frame 的前 3 维
+    pred_sim_all = np.stack(pred_sim_states_list, axis=0)  # (N, T, D)
+    pred_input_all = np.stack(pred_input_states_list, axis=0)  # (N, T, D)
+
+    simulated_states_all_egoframe = global_traj_to_ego_all(pred_sim_all, initial_ego_state)
+    pred_states_all_ego_frame = global_traj_to_ego_all(pred_input_all, initial_ego_state)
+
     # print(f"🦋len of trajectory_Anchor is f{len(trajectory_Anchor)}")#(256 8 3)--》
     # print(f"🦋shape of trajectory_Anchor is f{trajectory_Anchor[0].shape}")#(256 8 3)--》 'Trajectory' object has no attribute 'shape' 
 
@@ -237,128 +314,41 @@ def pdm_score_multiTraj(
 #使用navsim simulator进行anchor的simulation
 #======================================================
 
-#PRINT
-    # for traj in trajectory_Anchor:
-    #     #transform_trajectory函数功能：Transform trajectory in global frame and return as InterpolatedTrajectory
-    #     anchor_traj = transform_trajectory(traj, initial_ego_state)#这个🟢pred_traj是插InterpolatedTrajectory对象：从ego_frame转化到global_frame;(ps:InterpolatedTrajectory这一步还没有进行插值,shape仍为（9,3））、
-    #     anchor_states = get_trajectory_as_array(anchor_traj, future_sampling, initial_ego_state.time_point)#(41,11)完成了插值
-    #     # print(f"🦋shape of traj is {pred_states.shape}")#(41, 11)
-    #     all_anchors_states.append(anchor_states)
+# #PRINT
+#     all_anchors_states = []
+#     # print(f"🐕🐕🐕111")
+#     for traj in trajectory_Anchor:
+#         #transform_trajectory函数功能：Transform trajectory in global frame and return as InterpolatedTrajectory
+#         anchor_traj = transform_trajectory(traj, initial_ego_state)#这个🟢pred_traj是插InterpolatedTrajectory对象：从ego_frame转化到global_frame;(ps:InterpolatedTrajectory这一步还没有进行插值,shape仍为（9,3））、
+#         anchor_states = get_trajectory_as_array(anchor_traj, future_sampling, initial_ego_state.time_point)#(41,11)完成了插值
+#         # print(f"🦋shape of traj is {pred_states.shape}")#(41, 11)
+#         all_anchors_states.append(anchor_states)
     
-    
-    # trajectoryAnchor_states = np.concatenate([s[None, ...] for s in all_anchors_states], axis=0)
+#     #NOTE 这里的anchor就是最初始的标准的256条轨迹
+#     trajectoryAnchor_states = np.concatenate([s[None, ...] for s in all_anchors_states], axis=0)
 
-    # # configurable output path for simulated anchors
-    # save_Anchor_dir = anchor_save_dir or \
-    #     "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation"
-    # os.makedirs(save_Anchor_dir, exist_ok=True)
-    # save_Anchor_path = os.path.join(
-    #     save_Anchor_dir,
-    #     anchor_save_name or "NavsimSimulationAnchor_256_original_20251230.npy",
-    # )
-    # if anchor_overwrite or (not os.path.exists(save_Anchor_path)):
-    #     simulated_states_of_anchor = simulator.simulate_proposals(
-    #         trajectoryAnchor_states,
-    #         initial_ego_state
-    #     )
-    #     simulated_anchor_all_egoframe=global_traj_to_ego_all(simulated_states_of_anchor, initial_ego_state)
-    #     np.save(save_Anchor_path, simulated_anchor_all_egoframe)
-    #     print(f"🐕🐕🐕Simulation saved to: {save_Anchor_path}")
+#     # configurable output path for simulated anchors
+#     save_Anchor_dir = "/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive"
+#     os.makedirs(save_Anchor_dir, exist_ok=True)
+#     save_Anchor_path = os.path.join(
+#         save_Anchor_dir,
+#         "LQRstyle_aggressive.npy",
+#     )
+#     anchor_overwrite=True
+#     # print(f"🐕🐕🐕222")
+#     if anchor_overwrite or (not os.path.exists(save_Anchor_path)):
+#         simulated_states_of_anchor = simulator.simulate_proposals(#这里得到的就是anchor经过不同风格的post_style以及LQR Style后的结果
+#             trajectoryAnchor_states,
+#             initial_ego_state
+#         )
+#         simulated_anchor_all_egoframe=global_traj_to_ego_all(simulated_states_of_anchor, initial_ego_state)
+#         np.save(save_Anchor_path, simulated_anchor_all_egoframe)
+#         print(f"🐕🐕🐕Simulation saved to: {save_Anchor_path}")
+    
 #PRINT     
 
 
-     # 计算 PDMResults 只用最高分的那条
-    scores = scorer.score_proposals(
-        simulated_states_all,#支持batch维度
-        metric_cache.observation,
-        metric_cache.centerline,
-        metric_cache.route_lane_ids,
-        metric_cache.drivable_area_map,
-    )
-
-    #DEBUG: compare model-selected vs oracle PDM-selected trajectory
-    # try:
-    pred_idxx=pred_idx
-    best_pdm_idx = int(np.argmax(scores[1:])) + 1  # exclude baseline 已经去除了人类开的
-    best_pdm_score = float(scores[best_pdm_idx])
-    chosen_score = float(scores[pred_idxx])
-    print(
-        f"PDM_DEBUG_SELECT pred_idx={pred_idxx} chosen_score={chosen_score:.4f} | "
-        f"best_pdm_idx={best_pdm_idx} best_pdm_score={best_pdm_score:.4f}"
-    )
-    # except Exception:
-    #     pass
-
-
-    # Refactor & add / modify existing metrics.
-    # pred_idx = 1
-
-    no_at_fault_collisions = scorer._multi_metrics[MultiMetricIndex.NO_COLLISION, pred_idxx]
-    drivable_area_compliance = scorer._multi_metrics[MultiMetricIndex.DRIVABLE_AREA, pred_idxx]
-    driving_direction_compliance = scorer._multi_metrics[
-        MultiMetricIndex.DRIVING_DIRECTION, pred_idxx
-    ]
-    ego_progress = scorer._weighted_metrics[WeightedMetricIndex.PROGRESS, pred_idxx]
-    time_to_collision_within_bound = scorer._weighted_metrics[WeightedMetricIndex.TTC, pred_idxx]
-    comfort = scorer._weighted_metrics[WeightedMetricIndex.COMFORTABLE, pred_idxx]
-    # driving_direction_compliance = scorer._weighted_metrics[WeightedMetricIndex.DRIVING_DIRECTION, pred_idx]
-    score = scores[pred_idxx]
-    # _debug_dump_scores(scorer, simulator, pred_idx)
-    #NOTE一个得分结构体
-    # underlying metric value for model-selected
-    try:
-        oncoming_progress_pred = float(scorer._oncoming_progress_value[pred_idxx])
-    except Exception:
-        oncoming_progress_pred = None
-
-    pdm_results = PDMResults(
-        no_at_fault_collisions,
-        drivable_area_compliance,
-        driving_direction_compliance ,
-        ego_progress,
-        time_to_collision_within_bound,
-        comfort,
-        # driving_direction_compliance,
-        score,
-        oncoming_progress=oncoming_progress_pred,
-    )
-    
-    # Also compute subscores for the oracle best PDM trajectory
-    no_at_fault_best = scorer._multi_metrics[MultiMetricIndex.NO_COLLISION, best_pdm_idx]
-    drivable_best = scorer._multi_metrics[MultiMetricIndex.DRIVABLE_AREA, best_pdm_idx]
-    driving_dir_best = scorer._multi_metrics[MultiMetricIndex.DRIVING_DIRECTION, best_pdm_idx]
-    progress_best = scorer._weighted_metrics[WeightedMetricIndex.PROGRESS, best_pdm_idx]
-    ttc_best = scorer._weighted_metrics[WeightedMetricIndex.TTC, best_pdm_idx]
-    comfort_best = scorer._weighted_metrics[WeightedMetricIndex.COMFORTABLE, best_pdm_idx]
-    score_best = scores[best_pdm_idx]
-
-    # underlying metric value for pdm-best
-    try:
-        oncoming_progress_best = float(scorer._oncoming_progress_value[best_pdm_idx])
-    except Exception:
-        oncoming_progress_best = None
-
-    pdm_best_results = PDMResults(
-        no_at_fault_best,
-        drivable_best,
-        driving_dir_best,
-        progress_best,
-        ttc_best,
-        comfort_best,
-        score_best,
-        oncoming_progress=oncoming_progress_best,
-    )
-#DEBUG
-    # 准备逆行掩码（oncoming）用于可视化
-    try:
-        oncoming_masks = scorer._ego_areas[:, :, EgoAreaIndex.ONCOMING_TRAFFIC]  # [B, T]
-        oncoming_mask_pred = oncoming_masks[pred_idx]
-        oncoming_mask_best = oncoming_masks[best_pdm_idx]
-        # print(f"💚💚💚PDM_DEBUG oncoming_mask_pred is={oncoming_mask_pred} oncoming_mask_best is={oncoming_mask_best}")
-    except Exception:
-        oncoming_mask_pred = None
-        oncoming_mask_best = None
-#DEBUG
+    # 旧的“整批评分”逻辑已移除，以上已按逐轨两条方案生成 pdm_results / pdm_best_results
     # print(f"🦋shape of simulated_states_all is f{simulated_states_all_egoframe.shape}") #(21, 41, 11)[diffusionDrive] (256, 41, 3)[WoTE]
     return (
         pdm_results,
@@ -367,8 +357,8 @@ def pdm_score_multiTraj(
         pred_states_all_ego_frame,#没有包含人类轨迹
         best_pdm_idx,#给出包含baseline偏移的best_idx
         pred_idx,#给出包含baseline偏移的pred_idx
-        oncoming_mask_pred,
-        oncoming_mask_best,
+        # oncoming_mask_pred,
+        # oncoming_mask_best,
     )
 
 #FIXME:

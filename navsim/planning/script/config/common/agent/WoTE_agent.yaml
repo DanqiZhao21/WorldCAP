@@ -6,9 +6,15 @@ config:
   _convert_: 'all'
   min_lr: 1e-6
   warmup_epochs: 3
+  #这些并没有起作用
   controller_injection_mode: none
   controller_inject_every_step: false
   controller_injection_strength: 0.3
+  controller_ref_traj_path: "/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" #NOTE这个一般不变动
+  # 使用单一 .npz 大包进行多风格采样
+  controller_exec_traj_path: "/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_styles.npz"
+  # 可选：按风格设置采样概率（与 bundle 中数量匹配），例如 "0.5,0.3,0.2"
+  # controller_style_probs: ""
 
 trajectory_sampling:
   _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
