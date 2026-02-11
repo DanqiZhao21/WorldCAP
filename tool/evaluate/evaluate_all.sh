@@ -3,7 +3,7 @@
 ##################
 export PYTHONPATH=/home/zhaodanqi/clone/WoTE/navsim:$PYTHONPATH
 export PYTHONPATH=/home/zhaodanqi/clone/WoTE/nuplan-devkit:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export NUPLAN_MAP_VERSION="nuplan-maps-v1.0"
 #===========================================================================================================
 # #第0_1 原ckpt的结果
@@ -278,14 +278,15 @@ export NUPLAN_MAP_VERSION="nuplan-maps-v1.0"
 #   agent.config.controller_inject_every_step=false
 
 
-
+#ADD
+#ADD
 #ADD 20260121  FILM_evaluate——02 1 EverySTEP融合
 
 # 02 和 1 的 Every step
 #NOTE 正常的   simulator.tracker_style=default \ simulator.post_style=none \
 python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
   agent=WoTE_agent \
-  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260120_235601_film02Every/epoch=19-step=26600.ckpt"' \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_152556_film02_every/epoch=19-step=26600.ckpt"' \
   experiment_name=eval/WoTE/default/ \
   split=test \
   scene_filter=navtest \
@@ -305,7 +306,7 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
 #NOTE poststyle1.51.5    simulator.post_style=yaw_speed_extreme \   simulator.post_params.heading_scale=1.5 \   simulator.post_params.speed_scale=1.5 \
 python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
   agent=WoTE_agent \
-  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260120_235601_film02Every/epoch=19-step=26600.ckpt"' \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_152556_film02_every/epoch=19-step=26600.ckpt"' \
   experiment_name=eval/WoTE/default/ \
   split=test \
   scene_filter=navtest \
@@ -325,7 +326,7 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
 #NOTE LQRstyle aggressive   simulator.tracker_style=aggressive \   simulator.post_style=none \
 python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
   agent=WoTE_agent \
-  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260120_235601_film02Every/epoch=19-step=26600.ckpt"' \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_152556_film02_every/epoch=19-step=26600.ckpt"' \
   experiment_name=eval/WoTE/default/ \
   split=test \
   scene_filter=navtest \
@@ -345,7 +346,7 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
 #ADD第4次 FILM_evaluate——1融合
 python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
   agent=WoTE_agent \
-  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260121_054315_film1Every/epoch=19-step=26600.ckpt"' \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_202100_film1_every/epoch=19-step=26600.ckpt"' \
   experiment_name=eval/WoTE/default/ \
   split=test \
   scene_filter=navtest \
@@ -365,7 +366,7 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
 #NOTE poststyle1.51.5    simulator.post_style=yaw_speed_extreme \   simulator.post_params.heading_scale=1.5 \   simulator.post_params.speed_scale=1.5 \
 python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
   agent=WoTE_agent \
-  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260121_054315_film1Every/epoch=19-step=26600.ckpt"' \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_202100_film1_every/epoch=19-step=26600.ckpt"' \
   experiment_name=eval/WoTE/default/ \
   split=test \
   scene_filter=navtest \
@@ -385,7 +386,7 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
 #NOTE LQRstyle aggressive   simulator.tracker_style=aggressive \   simulator.post_style=none \
 python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
   agent=WoTE_agent \
-  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260121_054315_film1Every/epoch=19-step=26600.ckpt"' \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_202100_film1_every/epoch=19-step=26600.ckpt"' \
   experiment_name=eval/WoTE/default/ \
   split=test \
   scene_filter=navtest \
@@ -402,7 +403,130 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
   agent.config.controller_injection_strength=1.0 \
   agent.config.controller_inject_every_step=true
 
+###ATTN EVERYSTEP 02 1
+#ADD
+#ADD 20260121  attn_evaluate——02 1 EverySTEP融合
 
+# 02 和 1 的 Every step
+#NOTE 正常的   simulator.tracker_style=default \ simulator.post_style=none \
+python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
+  agent=WoTE_agent \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_035026_attn02_every/epoch=19-step=26600.ckpt"' \
+  experiment_name=eval/WoTE/default/ \
+  split=test \
+  scene_filter=navtest \
+  simulator.tracker_style=default \
+  simulator.post_style=none \
+  simulator.post_params.heading_scale=1.0 \
+  simulator.post_params.heading_bias=0 \
+  simulator.post_params.speed_scale=1.0 \
+  simulator.post_params.speed_bias=0 \
+  simulator.post_params.noise_std=0\
+  agent.config.controller_ref_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" \
+  agent.config.controller_exec_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/LAB0_Original/Anchor_NavsimSimulation_256_3.npy" \
+  agent.config.controller_injection_mode=attn \
+  agent.config.controller_injection_strength=0.2 \
+  agent.config.controller_inject_every_step=true
+
+#NOTE poststyle1.51.5    simulator.post_style=yaw_speed_extreme \   simulator.post_params.heading_scale=1.5 \   simulator.post_params.speed_scale=1.5 \
+python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
+  agent=WoTE_agent \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_035026_attn02_every/epoch=19-step=26600.ckpt"' \
+  experiment_name=eval/WoTE/default/ \
+  split=test \
+  scene_filter=navtest \
+  simulator.tracker_style=default \
+  simulator.post_style=yaw_speed_extreme \
+  simulator.post_params.heading_scale=1.5 \
+  simulator.post_params.heading_bias=0 \
+  simulator.post_params.speed_scale=1.5 \
+  simulator.post_params.speed_bias=0 \
+  simulator.post_params.noise_std=0\
+  agent.config.controller_ref_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" \
+  agent.config.controller_exec_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/LAB2_Poststyle_yawspeedextreme1515/default_yaw15_0_speed_extreme15_0__8.npy" \
+  agent.config.controller_injection_mode=attn \
+  agent.config.controller_injection_strength=0.2 \
+  agent.config.controller_inject_every_step=true
+
+#NOTE LQRstyle aggressive   simulator.tracker_style=aggressive \   simulator.post_style=none \
+python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
+  agent=WoTE_agent \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_035026_attn02_every/epoch=19-step=26600.ckpt"' \
+  experiment_name=eval/WoTE/default/ \
+  split=test \
+  scene_filter=navtest \
+  simulator.tracker_style=aggressive \
+  simulator.post_style=none \
+  simulator.post_params.heading_scale=1.0 \
+  simulator.post_params.heading_bias=0 \
+  simulator.post_params.speed_scale=1.0\
+  simulator.post_params.speed_bias=0 \
+  simulator.post_params.noise_std=0\
+  agent.config.controller_ref_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" \
+  agent.config.controller_exec_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy" \
+  agent.config.controller_injection_mode=attn \
+  agent.config.controller_injection_strength=0.2 \
+  agent.config.controller_inject_every_step=true
+
+#ADD第4次 attn_evaluate——1融合
+python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
+  agent=WoTE_agent \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_101211_attn1_every/epoch=19-step=26600.ckpt"' \
+  experiment_name=eval/WoTE/default/ \
+  split=test \
+  scene_filter=navtest \
+  simulator.tracker_style=default \
+  simulator.post_style=none \
+  simulator.post_params.heading_scale=1.0 \
+  simulator.post_params.heading_bias=0 \
+  simulator.post_params.speed_scale=1.0 \
+  simulator.post_params.speed_bias=0 \
+  simulator.post_params.noise_std=0\
+  agent.config.controller_ref_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" \
+  agent.config.controller_exec_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/LAB0_Original/Anchor_NavsimSimulation_256_3.npy" \
+  agent.config.controller_injection_mode=attn \
+  agent.config.controller_injection_strength=1.0 \
+  agent.config.controller_inject_every_step=true
+
+#NOTE poststyle1.51.5    simulator.post_style=yaw_speed_extreme \   simulator.post_params.heading_scale=1.5 \   simulator.post_params.speed_scale=1.5 \
+python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
+  agent=WoTE_agent \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_101211_attn1_every/epoch=19-step=26600.ckpt"' \
+  experiment_name=eval/WoTE/default/ \
+  split=test \
+  scene_filter=navtest \
+  simulator.tracker_style=default \
+  simulator.post_style=yaw_speed_extreme \
+  simulator.post_params.heading_scale=1.5 \
+  simulator.post_params.heading_bias=0 \
+  simulator.post_params.speed_scale=1.5 \
+  simulator.post_params.speed_bias=0 \
+  simulator.post_params.noise_std=0\
+  agent.config.controller_ref_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" \
+  agent.config.controller_exec_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/LAB2_Poststyle_yawspeedextreme1515/default_yaw15_0_speed_extreme15_0__8.npy" \
+  agent.config.controller_injection_mode=attn \
+  agent.config.controller_injection_strength=1.0 \
+  agent.config.controller_inject_every_step=true
+
+#NOTE LQRstyle aggressive   simulator.tracker_style=aggressive \   simulator.post_style=none \
+python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj.py \
+  agent=WoTE_agent \
+  'agent.checkpoint_path="/home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260130_101211_attn1_every/epoch=19-step=26600.ckpt"' \
+  experiment_name=eval/WoTE/default/ \
+  split=test \
+  scene_filter=navtest \
+  simulator.tracker_style=aggressive \
+  simulator.post_style=none \
+  simulator.post_params.heading_scale=1.0 \
+  simulator.post_params.heading_bias=0 \
+  simulator.post_params.speed_scale=1.0\
+  simulator.post_params.speed_bias=0 \
+  simulator.post_params.noise_std=0\
+  agent.config.controller_ref_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" \
+  agent.config.controller_exec_traj_path="/home/zhaodanqi/clone/WoTE/ControllerExp/LAB3_LQRstyle_aggressive/LQRstyle_aggressive_8.npy" \
+  agent.config.controller_injection_mode=attn \
+  agent.config.controller_injection_strength=1.0 \
+  agent.config.controller_inject_every_step=true
 
 
 

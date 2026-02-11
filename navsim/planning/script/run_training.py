@@ -21,6 +21,7 @@ import os
 from datetime import datetime
 import threading
 from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,19 @@ class WandbModelArtifactCallback(Callback):
         self._wandb_logger = wandb_logger
         self._uploaded: set[str] = set()
 
+    @staticmethod
+    def _sanitize_artifact_name(name: str) -> str:
+        # W&B artifact name限制：只允许字母数字、-、_、.
+        return re.sub(r"[^0-9A-Za-z._-]+", "_", name)
+
     def on_validation_end(self, trainer, pl_module):
+        try:
+            self._on_validation_end_impl(trainer, pl_module)
+        except Exception:
+            # 任何 W&B 上传失败都不应中断训练/后续实验。
+            logger.exception("W&B artifact upload failed in on_validation_end; continuing without stopping training.")
+
+    def _on_validation_end_impl(self, trainer, pl_module):
         # 定位 ModelCheckpoint 回调
         mc: ModelCheckpoint = None
         for cb in trainer.callbacks:
@@ -69,7 +82,9 @@ class WandbModelArtifactCallback(Callback):
         if hasattr(trainer, "is_global_zero") and not trainer.is_global_zero:
             return
 
-        artifact_name = f"{pl_module.__class__.__name__}-{Path(ckpt_path).stem}"
+        artifact_name = self._sanitize_artifact_name(
+            f"{pl_module.__class__.__name__}-{Path(ckpt_path).stem}"
+        )
         artifact = wandb.Artifact(name=artifact_name, type="model")
         artifact.add_file(ckpt_path)
         self._wandb_logger.experiment.log_artifact(
@@ -79,6 +94,12 @@ class WandbModelArtifactCallback(Callback):
         self._uploaded.add(ckpt_path)
 
     def on_train_end(self, trainer, pl_module):
+        try:
+            self._on_train_end_impl(trainer, pl_module)
+        except Exception:
+            logger.exception("W&B artifact upload failed in on_train_end; continuing without stopping training.")
+
+    def _on_train_end_impl(self, trainer, pl_module):
         # 训练结束时再上传一次最终/最佳权重，双重保险
         mc: ModelCheckpoint = None
         for cb in trainer.callbacks:
@@ -102,7 +123,9 @@ class WandbModelArtifactCallback(Callback):
         for path, aliases in candidates:
             if path in self._uploaded:
                 continue
-            artifact_name = f"{pl_module.__class__.__name__}-{Path(path).stem}"
+            artifact_name = self._sanitize_artifact_name(
+                f"{pl_module.__class__.__name__}-{Path(path).stem}"
+            )
             artifact = wandb.Artifact(name=artifact_name, type="model")
             artifact.add_file(path)
             self._wandb_logger.experiment.log_artifact(artifact, aliases=aliases)
@@ -231,7 +254,13 @@ def main(cfg: DictConfig) -> None:
         callbacks=[
             ckpt_callback,
             LearningRateMonitor(logging_interval='step'),
-            WandbModelArtifactCallback(logger_wandb),
+            # 默认不要上传 checkpoint 到 W&B（只记录指标/日志）。
+            # 如需开启：export WOTE_WANDB_UPLOAD_CKPT=1
+            *(
+                [WandbModelArtifactCallback(logger_wandb)]
+                if os.getenv("WOTE_WANDB_UPLOAD_CKPT", "0") == "1"
+                else []
+            ),
         ],
     )
 

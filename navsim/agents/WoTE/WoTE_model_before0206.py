@@ -238,22 +238,28 @@ class WoTEModel(nn.Module):
         # - 'attn': learned attention pooling (default)
         self.controller_style_pooling = getattr(config, 'controller_style_pooling', 'attn')
         self.ctrl_style_attn = nn.Linear(self.controller_emb_dim, 1)
+        # Where to inject controller information.
+        # Keep only the three intended injection points:
+        # - trajectory feature branch (CAP)
+        # - offset generation branch
+        # - reward_feature (scoring features)
+        self.controller_condition_on_traj_feature = bool(getattr(config, 'controller_condition_on_traj_feature', True))
+        self.controller_traj_condition_strength = float(getattr(config, 'controller_traj_condition_strength', 0.1) or 0.1)
 
-        # Controller-aware latent transition (BEV world model):
-        # We model controller as part of the transition dynamics by conditioning the latent
-        # world-model forward on a global controller style token.
-        self.controller_condition_on_world_model = bool(getattr(config, 'controller_condition_on_world_model', True))
-        self.controller_world_model_strength = float(getattr(config, 'controller_world_model_strength', 0.3) or 0.3)
-        # Where to inject controller token in the world model input tokens:
-        # - 'all' (default): add to ego + all BEV tokens
-        # - 'ego': add only to ego token (index 0)
-        self.controller_world_model_inject_target = str(getattr(config, 'controller_world_model_inject_target', 'all') or 'all').lower()
+        # NOTE: offset/reward injection toggles are checked via self._config in the forward.
 
         # projection 把 embedding 投影成 BEV 维度
         self.ctrl_proj = nn.Linear(self.controller_emb_dim, 256)
         self.ctrl_token_ln = nn.LayerNorm(256)
-        # Controller token projection into model hidden_dim.
-        # NOTE: We intentionally do NOT condition traj/offset/reward branches anymore.
+        # 控制器条件注入模块（保留最简）：film / add
+        
+        self.controller_injection_mode = getattr(config, 'controller_injection_mode', 'film')
+        # FiLM for trajectory feature branch (ego+traj features): controller-aware planning (CAP)
+        self.ctrl_traj_film_scale = nn.Linear(256, 256)
+        self.ctrl_traj_film_shift = nn.Linear(256, 256)
+        self.ctrl_traj_film_ln = nn.LayerNorm(256)
+        # 注入强度（0~1）：线性门控，避免控特征压过 BEV
+        self.controller_injection_strength = float(getattr(config, 'controller_injection_strength', 0.3))
 
         # Load controller bank (ref, exec).
         # Supports:
@@ -267,7 +273,7 @@ class WoTEModel(nn.Module):
         exec_path = getattr(
             config,
             'controller_exec_traj_path',
-            "/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_styles.npz",
+            "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchor_NavsimSimulation_256_3.npy",
         )
 
         # If using a bundle, keep the full style set for training-time sampling.
@@ -348,6 +354,7 @@ class WoTEModel(nn.Module):
                 label = self._controller_bundle_style_names[idx]
             print(f"💜 controller style sampled: idx={idx}" + (f" name={label}" if label else ""))
             
+#NOTE 注入点 A：Trajectory feature 分支（CAP 推荐：controller affects trajectory space）
     def encode_traj_into_ego_feat(self, ego_status_feat: torch.Tensor, init_trajectory_anchor: torch.Tensor, batch_size: int):
         """
         Encode trajectory into ego feature by processing cluster centers and concatenating features.
@@ -363,6 +370,30 @@ class WoTEModel(nn.Module):
         """
         trajectory_anchors_feat, num_traj = self._get_trajectory_anchors_feat(init_trajectory_anchor, batch_size)#将ego_status_feat 和 init_trajectory_anchor 拼，得到 encoded_ego_feature
         ego_feat_encoded = self._concatenate_ego_and_traj_features(ego_status_feat, trajectory_anchors_feat)
+        #PRINT
+        # Controller-aware planning (CAP): condition trajectory feature branch on controller dynamics.
+        # This makes per-candidate trajectory representations controller-dependent, which aligns
+        # with closed-loop execution differences at evaluation time.
+        if (
+            getattr(self._config, 'controller_condition_on_traj_feature', False)
+            and (self.controller_injection_mode != 'none')
+            and (self.controller_injection_strength > 0.0)
+        ):
+            style_token = self._compute_controller_style_token(batch_size, ego_feat_encoded.device)  # [B, 256]
+            s_cfg = float(getattr(self._config, 'controller_traj_condition_strength', 0.0) or 0.0)
+            s = s_cfg if s_cfg > 0.0 else float(self.controller_injection_strength)
+            s = float(max(0.0, min(1.0, s)))
+
+            mode = str(self.controller_injection_mode or 'add').lower()
+            if mode == 'film':
+                scale = torch.sigmoid(self.ctrl_traj_film_scale(style_token)).view(batch_size, 1, 1, -1)
+                shift = self.ctrl_traj_film_shift(style_token).view(batch_size, 1, 1, -1)
+                film_out = self.ctrl_traj_film_ln(ego_feat_encoded * scale + shift)
+                ego_feat_encoded = ego_feat_encoded * (1.0 - s) + film_out * s
+            else:
+                # For non-token modes (attn/concat) we fall back to a stable additive conditioning.
+                ego_feat_encoded = ego_feat_encoded + (s * style_token[:, None, None, :])
+
         return ego_feat_encoded, num_traj
 
     def extract_trajectory_feature(self, features: Dict[str, torch.Tensor], targets=None) -> Dict[str, Any]:
@@ -401,6 +432,16 @@ class WoTEModel(nn.Module):
         #NOTE此处体现了Option A ;影响了encode traj into ego feature输出的ego feat encoded,采用的controller_injection_mode[film或者add]
         ego_feat_fixed_anchor_WoTE, num_traj = self.encode_traj_into_ego_feat(ego_status_feat, init_trajectory_anchor, batch_size)
         
+#NOTE 注入点 B：offset 生成分支（controller affects offset generation）
+        # Optional: condition the offset branch (and downstream) on controller global style.
+        # This does NOT assume controller-bank anchors align with planner anchors.
+        if getattr(self._config, 'controller_condition_on_offset', False) and (self.controller_injection_mode != 'none') and (self.controller_injection_strength > 0.0):
+            style_token = self._compute_controller_style_token(batch_size, ego_feat_fixed_anchor_WoTE.device)  # [B, 256]
+            s_cfg = float(getattr(self._config, 'controller_offset_condition_strength', 0.0) or 0.0)
+            s = s_cfg if s_cfg > 0.0 else float(self.controller_injection_strength)
+            ego_feat_fixed_anchor_WoTE = ego_feat_fixed_anchor_WoTE + (s * style_token[:, None, None, :])
+            
+
         # Optional offset prediction
         offset_dict = self._predict_offset(ego_feat_fixed_anchor_WoTE, flatten_bev_feature)
         results.update(offset_dict)
@@ -464,8 +505,13 @@ class WoTEModel(nn.Module):
         )
         # print(f"💜flatten_bev_feature_multi_trajs(afer reshape): {flatten_bev_feature_multi_trajs.shape}")#torch.Size([4096, 64, 256])
         
-        # Controller is injected into the latent transition (world model) inside
-        # `_latent_world_model_processing` to model controller-dependent dynamics.
+        # NOTE: controller is intentionally NOT injected into BEV/world-model tokens.
+        # We keep controller influence in trajectory/action space:
+        # - traj feature (CAP)
+        # - offset branch
+        # - reward_feature
+
+        style_token = None
    
         # Multiple iterations
         num_iterations = self.num_fut_timestep
@@ -505,6 +551,15 @@ class WoTEModel(nn.Module):
             num_traj,
         )
         
+#NOTE 注入点 C：reward_feature（scoring features）（controller affects scoring features）
+        # Optional: condition reward_feature (scoring features) on controller style.
+        if getattr(self._config, 'controller_condition_on_reward_feature', False):
+            if style_token is None:
+                style_token = self._compute_controller_style_token(batch_size, reward_feature.device)
+            s_cfg = float(getattr(self._config, 'controller_reward_condition_strength', 0.0) or 0.0)
+            s = s_cfg if s_cfg > 0.0 else float(self.controller_injection_strength)
+            reward_feature = reward_feature + (s * style_token[:, None, :])
+
         results["reward_feature"] = reward_feature
         
         #PRINT:
@@ -579,7 +634,7 @@ class WoTEModel(nn.Module):
         Returns:
             style_token: [batch_size, 256]
         """
-        if (not getattr(self, 'controller_condition_on_world_model', False)) or (getattr(self, 'controller_world_model_strength', 0.0) <= 0.0):
+        if (self.controller_injection_mode == 'none') or (self.controller_injection_strength <= 0.0):
             return torch.zeros((batch_size, 256), device=device)
 
         style_emb = self._compute_controller_style_emb64(batch_size, device)  # [B, emb_dim]
@@ -711,21 +766,6 @@ class WoTEModel(nn.Module):
         # print(f"💚shape of scene_position_embedding: {scene_position_embedding.shape}")#([4096, 65, 256])
         scene_feature = scene_feature + scene_position_embedding    #没有拼接、没有广播扩展，只是简单地把每个元素加上对应位置的值。这个是逐元素相加
         # print(f"💚shape of scene_feature: {scene_feature.shape}")#torch.Size([4096, 65, 256])
-
-        # Controller-aware transition: condition world-model tokens on controller style.
-        if getattr(self._config, 'controller_condition_on_world_model', getattr(self, 'controller_condition_on_world_model', False)):
-            s_cfg = float(getattr(self._config, 'controller_world_model_strength', getattr(self, 'controller_world_model_strength', 0.0)) or 0.0)
-            s = float(max(0.0, min(1.0, s_cfg)))
-            if s > 0.0:
-                style_token = self._compute_controller_style_token(batch_size, scene_feature.device)  # [B, 256]
-                # expand to (B*num_traj, 1, 256) then broadcast over token dim
-                style_bt = style_token[:, None, :].expand(batch_size, num_traj, -1).reshape(batch_size * num_traj, 1, -1)
-                target = str(getattr(self._config, 'controller_world_model_inject_target', getattr(self, 'controller_world_model_inject_target', 'all')) or 'all').lower()
-                if target in {'ego', 'ego_only'}:
-                    scene_feature[:, 0:1, :] = scene_feature[:, 0:1, :] + (s * style_bt)
-                else:
-                    scene_feature = scene_feature + (s * style_bt)
-
         # Reshape to fit the latent world model
         fut_scene_feature = self.latent_world_model(scene_feature)  
         # print(f"💚shape of fut_scene_feature: {fut_scene_feature.shape}")#shape of fut_scene_feature: ([4096, 65, 256])

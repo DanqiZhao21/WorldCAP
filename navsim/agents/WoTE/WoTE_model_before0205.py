@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 
 #FIXME: 新增embedding模块
 from ControllerInTheLoop.step2_Embedding.ControllerEmbedding import ControllerEmbedding
+from navsim.agents.WoTE.controller_response_predictor import ControllerResponsePredictor
 
 
 
@@ -231,123 +232,234 @@ class WoTEModel(nn.Module):
             emb_dim=self.controller_emb_dim,
             feature_mode=self.controller_feature_mode,
         )
-
-        # How to pool controller-bank embeddings into a single global style embedding.
-        # Kept for backward compatibility with older configs/scripts.
-        # - 'mean': average over controller-bank candidates
-        # - 'attn': learned attention pooling (default)
+        # controller condition scope:
+        # - 'global': controller is a style/preference token shared across all candidate trajectories
+        # - 'per_traj': only valid when controller bank trajectories align with planner anchors
+        self.controller_condition_scope = getattr(config, 'controller_condition_scope', 'global')
         self.controller_style_pooling = getattr(config, 'controller_style_pooling', 'attn')
+
+        # Where to inject controller information.
+        # CAP (controller-aware planning) typically injects into trajectory features, not BEV.
+        self.controller_condition_on_bev_tokens = bool(getattr(config, 'controller_condition_on_bev_tokens', True))
+        self.controller_condition_on_traj_feature = bool(getattr(config, 'controller_condition_on_traj_feature', False))
+        self.controller_traj_condition_strength = float(getattr(config, 'controller_traj_condition_strength', 0.0) or 0.0)
+
+        # Plug-in: Controller Response Predictor (tracking residual model)
+        # Used to penalize candidate trajectories that are predicted to be hard to track
+        # under the chosen controller at evaluation time.
+        self.controller_use_response_predictor = bool(getattr(config, 'controller_use_response_predictor', False))
+        # Optional: use response predictor to *pre-compensate* planned trajectories.
+        self.controller_use_response_compensation = bool(getattr(config, 'controller_use_response_compensation', False))
+        self.controller_compensation_weight = float(getattr(config, 'controller_compensation_weight', 1.0) or 1.0)
+        self.controller_compensation_apply_in_train = bool(getattr(config, 'controller_compensation_apply_in_train', False))
+
+        self.controller_response_predictor_path = str(getattr(config, 'controller_response_predictor_path', '') or '')
+        self.controller_response_predictor_trainable = bool(getattr(config, 'controller_response_predictor_trainable', False))
+        self.controller_risk_weight = float(getattr(config, 'controller_risk_weight', 0.0) or 0.0)
+        self.controller_risk_xy_weight = float(getattr(config, 'controller_risk_xy_weight', 1.0) or 1.0)
+        self.controller_risk_yaw_weight = float(getattr(config, 'controller_risk_yaw_weight', 0.2) or 0.2)
+        self.controller_risk_apply_in_train = bool(getattr(config, 'controller_risk_apply_in_train', False))
+
+        self.controller_response_predictor = None
+        if self.controller_use_response_predictor or self.controller_use_response_compensation:
+            try:
+                num_poses = int(config.trajectory_sampling.num_poses)
+            except Exception:
+                num_poses = 8
+            self.controller_response_predictor = ControllerResponsePredictor(
+                num_poses=num_poses,
+                traj_dim=3,
+                controller_emb_dim=self.controller_emb_dim,
+            )
+
+            if self.controller_response_predictor_path and os.path.isfile(self.controller_response_predictor_path):
+                try:
+                    ckpt = torch.load(self.controller_response_predictor_path, map_location='cpu')
+                    if isinstance(ckpt, dict):
+                        enc_sd = ckpt.get('controller_encoder', None)
+                        pred_sd = ckpt.get('response_predictor', None)
+                        if isinstance(enc_sd, dict):
+                            self.controller_encoder.load_state_dict(enc_sd, strict=False)
+                        if isinstance(pred_sd, dict):
+                            self.controller_response_predictor.load_state_dict(pred_sd, strict=False)
+                    print(f"💜 Loaded controller response predictor: {self.controller_response_predictor_path}")
+                except Exception as e:
+                    print(f"⚠️ Failed to load controller response predictor ckpt: {e}")
+            else:
+                print("⚠️ controller response predictor enabled but controller_response_predictor_path is empty/missing")
+
+            if not self.controller_response_predictor_trainable:
+                for p in self.controller_encoder.parameters():
+                    p.requires_grad = False
+                for p in self.controller_response_predictor.parameters():
+                    p.requires_grad = False
+
         self.ctrl_style_attn = nn.Linear(self.controller_emb_dim, 1)
-
-        # Controller-aware latent transition (BEV world model):
-        # We model controller as part of the transition dynamics by conditioning the latent
-        # world-model forward on a global controller style token.
-        self.controller_condition_on_world_model = bool(getattr(config, 'controller_condition_on_world_model', True))
-        self.controller_world_model_strength = float(getattr(config, 'controller_world_model_strength', 0.3) or 0.3)
-        # Where to inject controller token in the world model input tokens:
-        # - 'all' (default): add to ego + all BEV tokens
-        # - 'ego': add only to ego token (index 0)
-        self.controller_world_model_inject_target = str(getattr(config, 'controller_world_model_inject_target', 'all') or 'all').lower()
-
         # projection 把 embedding 投影成 BEV 维度
         self.ctrl_proj = nn.Linear(self.controller_emb_dim, 256)
         self.ctrl_token_ln = nn.LayerNorm(256)
-        # Controller token projection into model hidden_dim.
-        # NOTE: We intentionally do NOT condition traj/offset/reward branches anymore.
+        # 控制器条件注入模块（可切换）：film / attn / concat / sum
+        
+        self.controller_injection_mode = getattr(config, 'controller_injection_mode', 'attn')
+        # FiLM: 基于控制器特征生成逐 token 的缩放与偏置
+        self.ctrl_film_scale = nn.Linear(256, 256)
+        self.ctrl_film_shift = nn.Linear(256, 256)
+        self.ctrl_film_ln = nn.LayerNorm(256)
 
-        # Load controller bank (ref, exec).
-        # Supports:
-        # - exec: .npy, ref: .npy
-        # - exec: bundle .npz with keys exec_trajs [S,256,8,3], ref_traj [256,8,3] (sample styles during training)
-        ref_path = getattr(
-            config,
-            'controller_ref_traj_path',
-            "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256_centered.npy",
-        )
-        exec_path = getattr(
-            config,
-            'controller_exec_traj_path',
-            "/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_styles.npz",
-        )
+        # FiLM for trajectory feature branch (ego+traj features): controller-aware planning (CAP)
+        self.ctrl_traj_film_scale = nn.Linear(256, 256)
+        self.ctrl_traj_film_shift = nn.Linear(256, 256)
+        self.ctrl_traj_film_ln = nn.LayerNorm(256)
+        # Cross-Attention: 让 BEV token 以控制器为记忆做一次注意力更新
+        self.ctrl_attn = nn.MultiheadAttention(embed_dim=256, num_heads=8, batch_first=True)
+        self.ctrl_attn_dropout = nn.Dropout(0.1)
+        # Concat: 拼接后回投影到隐藏维度
+        self.ctrl_concat_proj = nn.Linear(256 * 2, 256)
+        # 是否在世界模型的每一步都进行控制器注入
+        self.controller_inject_every_step = getattr(config, 'controller_inject_every_step', False)
+        # 注入强度（0~1）：线性门控，避免控特征压过 BEV
+        self.controller_injection_strength = float(getattr(config, 'controller_injection_strength', 0.3))
+        
+        
+        # 多风格：使用现有单字段路径，支持目录或逗号列表；带权采样概率支持环境变量
+        self.controller_style_sampling = getattr(config, 'controller_style_sampling', 'per_batch')
+        raw_probs = getattr(config, 'controller_style_probs', None)
+        if raw_probs is None:
+            env_probs = os.environ.get('WOTE_STYLE_PROBS', None)
+            if env_probs:
+                try:
+                    raw_probs = [float(x) for x in env_probs.split(',')]
+                except Exception:
+                    raw_probs = None
+        self._controller_style_probs = None
 
-        # If using a bundle, keep the full style set for training-time sampling.
-        self._controller_bundle_exec = None  # torch.Tensor [S, 256, 8, 3]
-        self._controller_bundle_ref = None   # torch.Tensor [256, 8, 3]
-        self._controller_bundle_style_names = None  # Optional[List[str]]
+        ref_path_attr = getattr(config, 'controller_ref_traj_path', 
+                    "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchors_Original_256_centered.npy")
+        exec_path_attr = getattr(config, 'controller_exec_traj_path', 
+                    "/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Anchor_NavsimSimulation_256_3.npy")
 
+        def _to_paths(path_like):
+            # 直接列表/元组：按原样返回
+            if isinstance(path_like, (list, tuple)):
+                return list(path_like)
+            # 目录：收集所有 .npy
+            if isinstance(path_like, str) and os.path.isdir(path_like):
+                files = [os.path.join(path_like, f) for f in os.listdir(path_like) if f.endswith('.npy')]
+                files.sort()
+                return files
+            # 字符串列表格式：去掉包裹的 [] 并按逗号拆分
+            if isinstance(path_like, str):
+                s = path_like.strip()
+                if s.startswith('[') and s.endswith(']'):
+                    s = s[1:-1]
+                if ',' in s:
+                    parts = [p.strip().strip('"').strip("'") for p in s.split(',')]
+                    return [p for p in parts if p]
+                if s:
+                    return [s]
+            # 其他：封装为单元素列表
+            return [path_like]
+
+        exec_paths = _to_paths(exec_path_attr)
+        ref_paths = _to_paths(ref_path_attr)
+
+        self._exec_bank = {}
+        self._ref_bank = {}
+        self._exec_bank_src = {}
+        self._ref_bank_src = {}
+        self._style_names = {}
+
+        # 支持 .npz 大包：包含多个风格的执行轨迹与单一参考轨迹
         try:
-            if isinstance(exec_path, str) and exec_path.endswith('.npz') and os.path.isfile(exec_path):
-                data = np.load(exec_path, allow_pickle=True)
-                exec_trajs = data.get('exec_trajs', None)
-                ref_traj_np = data.get('ref_traj', None)
-                if exec_trajs is None or ref_traj_np is None:
-                    raise RuntimeError('Missing exec_trajs/ref_traj in controller bundle')
-                self._controller_bundle_exec = torch.tensor(exec_trajs, dtype=torch.float32)  # [S,256,8,3]
-                self._controller_bundle_ref = torch.tensor(ref_traj_np, dtype=torch.float32)  # [256,8,3]
-                style_names = data.get('style_names', None)
-                if style_names is not None:
-                    try:
-                        self._controller_bundle_style_names = [str(x) for x in list(style_names)]
-                    except Exception:
-                        self._controller_bundle_style_names = None
-
-                # Initialize active style (can be overridden via env at runtime).
-                self._active_ref_trajs = self._controller_bundle_ref
-                self._active_exec_trajs = self._controller_bundle_exec[0]
-                print(f"💜 Loaded controller bundle: {exec_path} (styles={int(self._controller_bundle_exec.shape[0])})")
+            if (
+                isinstance(exec_paths, list)
+                and len(exec_paths) == 1
+                and isinstance(exec_paths[0], str)
+                and exec_paths[0].endswith('.npz')
+                and os.path.isfile(exec_paths[0])
+            ):
+                bundle_path = exec_paths[0]
+                data = np.load(bundle_path, allow_pickle=True)
+                exec_trajs = data.get('exec_trajs', None)  # [N, 256, 8, 3]
+                ref_traj_np = data.get('ref_traj', None)    # [256, 8, 3]
+                style_names = data.get('style_names', None) # optional: [N] names/labels
+                if exec_trajs is not None and ref_traj_np is not None:
+                    N = int(exec_trajs.shape[0])
+                    ref_tensor = torch.tensor(ref_traj_np, dtype=torch.float32)
+                    for i in range(N):
+                        key = f"style_{i}"
+                        self._exec_bank[key] = torch.tensor(exec_trajs[i], dtype=torch.float32)
+                        self._ref_bank[key] = ref_tensor
+                        self._exec_bank_src[key] = f"{bundle_path}::exec[{i}]"
+                        self._ref_bank_src[key] = f"{bundle_path}::ref"
+                        if style_names is not None and len(style_names) == N:
+                            try:
+                                self._style_names[key] = str(style_names[i])
+                            except Exception:
+                                pass
+                else:
+                    raise RuntimeError("Missing exec_trajs/ref_traj in bundle npz")
             else:
-                self._active_ref_trajs = torch.tensor(np.load(ref_path), dtype=torch.float32)
-                self._active_exec_trajs = torch.tensor(np.load(exec_path), dtype=torch.float32)
-                print(f"💜 Loaded controller bank: ref={ref_path} exec={exec_path}")
+                # 旧逻辑：路径/目录/列表
+                for i, p in enumerate(exec_paths):
+                    key = f"style_{i}"
+                    self._exec_bank[key] = torch.tensor(np.load(p), dtype=torch.float32)
+                    self._exec_bank_src[key] = p
+                for j, k in enumerate(self._exec_bank.keys()):
+                    ref_idx = j if j < len(ref_paths) else 0
+                    ref_p = ref_paths[ref_idx]
+                    self._ref_bank[k] = torch.tensor(np.load(ref_p), dtype=torch.float32)
+                    self._ref_bank_src[k] = ref_p
         except Exception as e:
-            print(f"⚠️ Failed to load controller bank, fallback to zeros: {e}")
-            # Fallback to keep training/eval alive (controller injection becomes near-noop).
-            self._active_ref_trajs = torch.zeros((256, 8, 3), dtype=torch.float32)
-            self._active_exec_trajs = torch.zeros((256, 8, 3), dtype=torch.float32)
+            print(f"⚠️ Controller bank load failed, fallback to single-file mode: {e}")
+            self._exec_bank.clear(); self._ref_bank.clear(); self._exec_bank_src.clear(); self._ref_bank_src.clear()
+            if isinstance(exec_path_attr, str) and os.path.isfile(exec_path_attr) and exec_path_attr.endswith('.npy'):
+                self._exec_bank['style_0'] = torch.tensor(np.load(exec_path_attr), dtype=torch.float32)
+                self._ref_bank['style_0'] = torch.tensor(np.load(ref_path_attr), dtype=torch.float32)
+                self._exec_bank_src['style_0'] = exec_path_attr
+                self._ref_bank_src['style_0'] = ref_path_attr
 
-    def _maybe_sample_controller_style_for_batch(self):
-        """Sample one controller style per forward call during training.
-
-        - Only active when controller exec path is a bundle (.npz) with multiple styles.
-        - Disabled in eval to avoid metric jitter.
-        - Optional env override:
-            WOTE_CTRL_STYLE_IDX=<int> forces a fixed style index.
-            WOTE_CTRL_STYLE_DEBUG=1 prints chosen style.
-        """
-        if getattr(self, 'is_eval', False):
-            return
-        if self._controller_bundle_exec is None or self._controller_bundle_ref is None:
-            return
-
-        try:
-            num_styles = int(self._controller_bundle_exec.shape[0])
-        except Exception:
-            return
-        if num_styles <= 1:
-            self._active_ref_trajs = self._controller_bundle_ref
-            self._active_exec_trajs = self._controller_bundle_exec[0]
-            return
-
-        forced = os.environ.get('WOTE_CTRL_STYLE_IDX', None)
-        if forced is not None and str(forced).strip() != '':
-            try:
-                idx = int(forced)
-                idx = max(0, min(num_styles - 1, idx))
-            except Exception:
-                idx = 0
-        else:
+        self._controller_style_keys = list(self._exec_bank.keys())
+        if len(self._controller_style_keys) > 0:
+            if raw_probs is not None and isinstance(raw_probs, (list, tuple)):
+                if len(raw_probs) == len(self._controller_style_keys):
+                    s = float(sum(raw_probs))
+                    self._controller_style_probs = [float(p)/s if s > 0 else 1.0/len(self._controller_style_keys) for p in raw_probs]
+                else:
+                    # 长度不匹配：退回均匀分布并提示
+                    print(f"⚠️ controller_style_probs length {len(raw_probs)} != {len(self._controller_style_keys)}, use uniform.")
+                    self._controller_style_probs = [1.0/len(self._controller_style_keys)]*len(self._controller_style_keys)
+            else:
+                self._controller_style_probs = [1.0/len(self._controller_style_keys)]*len(self._controller_style_keys)
             import random
-            idx = random.randrange(num_styles)
-
-        self._active_ref_trajs = self._controller_bundle_ref
-        self._active_exec_trajs = self._controller_bundle_exec[idx]
-
-        if os.environ.get('WOTE_CTRL_STYLE_DEBUG', '0') == '1':
-            label = None
-            if isinstance(self._controller_bundle_style_names, list) and idx < len(self._controller_bundle_style_names):
-                label = self._controller_bundle_style_names[idx]
-            print(f"💜 controller style sampled: idx={idx}" + (f" name={label}" if label else ""))
-            
+            init_key = random.choices(self._controller_style_keys, weights=self._controller_style_probs, k=1)[0]
+            self._active_ref_trajs = self._ref_bank[init_key]
+            self._active_exec_trajs = self._exec_bank[init_key]
+            try:
+                src = self._exec_bank_src.get(init_key)
+                # If bundle source, simplify logging to bundle + style name/index
+                if isinstance(src, str) and '::' in src:
+                    bundle, rest = src.split('::', 1)
+                    style_label = self._style_names.get(init_key, None)
+                    # parse index from exec[...] if possible
+                    import re
+                    m = re.search(r"exec\[(\d+)\]", rest)
+                    idx_str = m.group(1) if m else init_key
+                    label_str = style_label if style_label is not None else idx_str
+                    print(
+                        f"💜 Loaded controller bundle {bundle}; styles={self._controller_style_keys}; initial={label_str} "
+                        f"|| mode {self.controller_injection_mode} || strength {self.controller_injection_strength} || every_step {self.controller_inject_every_step}"
+                    )
+                else:
+                    print(f"💜 Loaded controller styles: {self._controller_style_keys}; initial_active={init_key} || exec_path={src} || ref_path={self._ref_bank_src.get(init_key)}")
+            except Exception:
+                pass
+        else:
+            print(f"💜 controller_ref_traj_path is {ref_path_attr} || controller_exec_traj_path is {exec_path_attr} || mode {self.controller_injection_mode} || strength {self.controller_injection_strength} || every_step {self.controller_inject_every_step}")
+            self._active_ref_trajs = torch.tensor(np.load(ref_path_attr), dtype=torch.float32)
+            self._active_exec_trajs = torch.tensor(np.load(exec_path_attr), dtype=torch.float32)
+            self._controller_style_keys = []
+#NOTE 注入点 A：Trajectory feature 分支（CAP 推荐：controller affects trajectory space）
     def encode_traj_into_ego_feat(self, ego_status_feat: torch.Tensor, init_trajectory_anchor: torch.Tensor, batch_size: int):
         """
         Encode trajectory into ego feature by processing cluster centers and concatenating features.
@@ -363,6 +475,30 @@ class WoTEModel(nn.Module):
         """
         trajectory_anchors_feat, num_traj = self._get_trajectory_anchors_feat(init_trajectory_anchor, batch_size)#将ego_status_feat 和 init_trajectory_anchor 拼，得到 encoded_ego_feature
         ego_feat_encoded = self._concatenate_ego_and_traj_features(ego_status_feat, trajectory_anchors_feat)
+
+        # Controller-aware planning (CAP): condition trajectory feature branch on controller dynamics.
+        # This makes per-candidate trajectory representations controller-dependent, which aligns
+        # with closed-loop execution differences at evaluation time.
+        if (
+            getattr(self._config, 'controller_condition_on_traj_feature', False)
+            and (self.controller_injection_mode != 'none')
+            and (self.controller_injection_strength > 0.0)
+        ):
+            style_token = self._compute_controller_style_token(batch_size, ego_feat_encoded.device)  # [B, 256]
+            s_cfg = float(getattr(self._config, 'controller_traj_condition_strength', 0.0) or 0.0)
+            s = s_cfg if s_cfg > 0.0 else float(self.controller_injection_strength)
+            s = float(max(0.0, min(1.0, s)))
+
+            mode = str(self.controller_injection_mode or 'add').lower()
+            if mode == 'film':
+                scale = torch.sigmoid(self.ctrl_traj_film_scale(style_token)).view(batch_size, 1, 1, -1)
+                shift = self.ctrl_traj_film_shift(style_token).view(batch_size, 1, 1, -1)
+                film_out = self.ctrl_traj_film_ln(ego_feat_encoded * scale + shift)
+                ego_feat_encoded = ego_feat_encoded * (1.0 - s) + film_out * s
+            else:
+                # For non-token modes (attn/concat) we fall back to a stable additive conditioning.
+                ego_feat_encoded = ego_feat_encoded + (s * style_token[:, None, None, :])
+
         return ego_feat_encoded, num_traj
 
     def extract_trajectory_feature(self, features: Dict[str, torch.Tensor], targets=None) -> Dict[str, Any]:
@@ -398,9 +534,16 @@ class WoTEModel(nn.Module):
         # Get cluster center features
         init_trajectory_anchor = self.trajectory_anchors.unsqueeze(0).repeat(batch_size, 1, 1, 1)
         #ego 当前状态特征 + 每个轨迹 anchor  → 编码成 ego-level latent 表征（feature embedding）
-        #NOTE此处体现了Option A ;影响了encode traj into ego feature输出的ego feat encoded,采用的controller_injection_mode[film或者add]
         ego_feat_fixed_anchor_WoTE, num_traj = self.encode_traj_into_ego_feat(ego_status_feat, init_trajectory_anchor, batch_size)
-        
+
+        # Optional: condition the offset branch (and downstream) on controller global style.
+        # This does NOT assume controller-bank anchors align with planner anchors.
+        if getattr(self._config, 'controller_condition_on_offset', False) and (self.controller_injection_mode != 'none') and (self.controller_injection_strength > 0.0):
+            style_token = self._compute_controller_style_token(batch_size, ego_feat_fixed_anchor_WoTE.device)  # [B, 256]
+            s_cfg = float(getattr(self._config, 'controller_offset_condition_strength', 0.0) or 0.0)
+            s = s_cfg if s_cfg > 0.0 else float(self.controller_injection_strength)
+            ego_feat_fixed_anchor_WoTE = ego_feat_fixed_anchor_WoTE + (s * style_token[:, None, None, :])
+
         # Optional offset prediction
         offset_dict = self._predict_offset(ego_feat_fixed_anchor_WoTE, flatten_bev_feature)
         results.update(offset_dict)
@@ -418,6 +561,28 @@ class WoTEModel(nn.Module):
             trajectory_offset_rewards = offset_dict["trajectory_offset_rewards"]
             offseted_trajectory_anchors = init_trajectory_anchor + trajectory_offset
 
+            # Optional: trajectory pre-compensation using the response predictor.
+            # This makes controller dynamics directly affect the *planned trajectory candidates*
+            # (not just the scoring), matching the intuition: if controller executes with a bias,
+            # plan a ref that counter-acts the bias.
+            if (
+                self.controller_response_predictor is not None
+                and bool(getattr(self._config, 'controller_use_response_compensation', self.controller_use_response_compensation))
+                and (float(getattr(self._config, 'controller_compensation_weight', self.controller_compensation_weight) or 0.0) != 0.0)
+            ):
+                try:
+                    beta = float(getattr(self._config, 'controller_compensation_weight', self.controller_compensation_weight) or 0.0)
+                    beta = float(max(-5.0, min(5.0, beta)))
+                    B, K, T, D = offseted_trajectory_anchors.shape
+                    ctrl_emb = self._compute_controller_style_emb64(B, offseted_trajectory_anchors.device)  # [B,64]
+                    ref_flat = offseted_trajectory_anchors.reshape(B * K, T, D)
+                    ctrl_flat = ctrl_emb.unsqueeze(1).expand(B, K, -1).reshape(B * K, -1)
+                    residual_hat = self.controller_response_predictor(ref_flat, ctrl_flat).view(B, K, T, D)
+                    offseted_trajectory_anchors = offseted_trajectory_anchors - (beta * residual_hat)
+                    results["trajectory_anchors_compensated"] = offseted_trajectory_anchors
+                except Exception as e:
+                    print(f"⚠️ controller trajectory compensation skipped: {e}")
+
             ego_feat_for_reward_network, _ = self.encode_traj_into_ego_feat(ego_status_feat, offseted_trajectory_anchors, batch_size)
         else: 
             # training
@@ -432,7 +597,10 @@ class WoTEModel(nn.Module):
             "ego_feat": ego_feat_for_reward_network,
         }
         return trajectory_outputs
+    
+    #FIXME:
 
+    #FIXME:
     
     def extract_reward_feature(self, trajectory_outputs, targets) -> Dict[str, torch.Tensor]:
         # Retrieve necessary variables from the previous intermediate results
@@ -464,8 +632,25 @@ class WoTEModel(nn.Module):
         )
         # print(f"💜flatten_bev_feature_multi_trajs(afer reshape): {flatten_bev_feature_multi_trajs.shape}")#torch.Size([4096, 64, 256])
         
-        # Controller is injected into the latent transition (world model) inside
-        # `_latent_world_model_processing` to model controller-dependent dynamics.
+        #===================Controller Embedding Injection (train-only) =================
+        ctrl_token = None
+        style_token = None
+        # if (not self.is_eval) and (self.controller_injection_mode != 'none') and (self.controller_injection_strength > 0.0):
+        if (
+            getattr(self._config, 'controller_condition_on_bev_tokens', True)
+            and (self.controller_injection_mode != 'none')
+            and (self.controller_injection_strength > 0.0)
+        ):
+            # Treat controller as a *global style* token by default, independent of planner anchors.
+            style_token = self._compute_controller_style_token(batch_size, flatten_bev_feature.device)  # [B, 256]
+            style_bt = style_token.unsqueeze(1).repeat(1, num_traj, 1).reshape(batch_size * num_traj, 256)  # [B*T, 256]
+            ctrl_token = style_bt.unsqueeze(1).expand(-1, self.num_plan_queries, -1)  # [B*T, Nq, 256]
+
+            # 初始融合：将控制器特征注入 BEV tokens（仅训练时）
+            flatten_bev_feature_multi_trajs = self._apply_controller_injection(
+                flatten_bev_feature_multi_trajs, ctrl_token
+            )
+# ===================================================================
    
         # Multiple iterations
         num_iterations = self.num_fut_timestep
@@ -489,6 +674,16 @@ class WoTEModel(nn.Module):
                 num_traj,
                 fut_idx=(i + 1) * interval
             )
+            # 可选：在每一步都再次注入控制器特征（仅训练时）
+            if (
+                (not self.is_eval)
+                and getattr(self._config, 'controller_condition_on_bev_tokens', True)
+                and self.controller_inject_every_step
+                and (ctrl_token is not None)
+            ):
+                fut_flatten_bev_feature_multi_trajs = self._apply_controller_injection(
+                    fut_flatten_bev_feature_multi_trajs, ctrl_token
+                )
             # print(f"💟💟1_shape of fut_flatten_bev_feature_multi_trajs: {fut_flatten_bev_feature_multi_trajs.shape}")#💟💟1_shape of fut_flatten_bev_feature_multi_trajs: torch.Size([256, 64, 256])==》train([4096, 64, 256])
             ego_feat_list.append(fut_ego_feat)
             bev_feat_list.append(fut_flatten_bev_feature_multi_trajs)
@@ -504,7 +699,15 @@ class WoTEModel(nn.Module):
             batch_size,
             num_traj,
         )
-        
+
+        # Optional: condition reward_feature (scoring features) on controller style.
+        if getattr(self._config, 'controller_condition_on_reward_feature', False):
+            if style_token is None:
+                style_token = self._compute_controller_style_token(batch_size, reward_feature.device)
+            s_cfg = float(getattr(self._config, 'controller_reward_condition_strength', 0.0) or 0.0)
+            s = s_cfg if s_cfg > 0.0 else float(self.controller_injection_strength)
+            reward_feature = reward_feature + (s * style_token[:, None, :])
+
         results["reward_feature"] = reward_feature
         
         #PRINT:
@@ -543,9 +746,7 @@ class WoTEModel(nn.Module):
         
 
 #FIXME:bev fut loss 只取最终步数的ego特征和BEV特征
-        # NOTE: fut BEV semantic map supervision shares the same heads as map loss.
-        # If `use_map_loss` is disabled, those heads are not constructed.
-        if (targets is not None) and self.use_map_loss:  # 训练阶段 + 需要 map/fut_map loss 才计算
+        if targets is not None:#整个是为了训练阶段准备:期望世界模型预测的轨迹向真实的执行轨迹靠拢
             # Prepare future BEV features
             #这里的targets的anchor没有用simulator么？
             sampled_fut_flatten_bev_feature_multi_trajs = self._sample_future_bev_feature(#这里根据tragets的采样 对应的采样出latent woard model关于该anchor轨迹的前推的东西
@@ -565,13 +766,11 @@ class WoTEModel(nn.Module):
 #FIXME:
 
     def process_trajectory_and_reward(self, features: Dict[str, torch.Tensor], targets=None) -> Dict[str, torch.Tensor]:
-        # Sample controller style once per batch (training only) to improve generalization.
-        self._maybe_sample_controller_style_for_batch()
+        # Ensure controller style sampling happens once per batch, and is consistent across stages.
+        self._maybe_switch_controller_style_for_batch()
         trajectory_outputs = self.extract_trajectory_feature(features, targets)
         final_results = self.extract_reward_feature(trajectory_outputs, targets)
         return final_results
-
-#ADD 剩下的都试一下功能函数
 
     def _compute_controller_style_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Compute a controller *style* token independent of planner candidate trajectories.
@@ -579,7 +778,7 @@ class WoTEModel(nn.Module):
         Returns:
             style_token: [batch_size, 256]
         """
-        if (not getattr(self, 'controller_condition_on_world_model', False)) or (getattr(self, 'controller_world_model_strength', 0.0) <= 0.0):
+        if (self.controller_injection_mode == 'none') or (self.controller_injection_strength <= 0.0):
             return torch.zeros((batch_size, 256), device=device)
 
         style_emb = self._compute_controller_style_emb64(batch_size, device)  # [B, emb_dim]
@@ -601,7 +800,7 @@ class WoTEModel(nn.Module):
 
         bank_emb = self.controller_encoder(ref_traj, exec_traj)  # [N_ctrl, emb_dim]
 
-        pooling = str(getattr(self, 'controller_style_pooling', None) or 'attn').lower()
+        pooling = str(self.controller_style_pooling or 'attn').lower()
         if pooling in {'mean', 'avg', 'average'}:
             style_emb = bank_emb.mean(dim=0)
         else:
@@ -711,21 +910,6 @@ class WoTEModel(nn.Module):
         # print(f"💚shape of scene_position_embedding: {scene_position_embedding.shape}")#([4096, 65, 256])
         scene_feature = scene_feature + scene_position_embedding    #没有拼接、没有广播扩展，只是简单地把每个元素加上对应位置的值。这个是逐元素相加
         # print(f"💚shape of scene_feature: {scene_feature.shape}")#torch.Size([4096, 65, 256])
-
-        # Controller-aware transition: condition world-model tokens on controller style.
-        if getattr(self._config, 'controller_condition_on_world_model', getattr(self, 'controller_condition_on_world_model', False)):
-            s_cfg = float(getattr(self._config, 'controller_world_model_strength', getattr(self, 'controller_world_model_strength', 0.0)) or 0.0)
-            s = float(max(0.0, min(1.0, s_cfg)))
-            if s > 0.0:
-                style_token = self._compute_controller_style_token(batch_size, scene_feature.device)  # [B, 256]
-                # expand to (B*num_traj, 1, 256) then broadcast over token dim
-                style_bt = style_token[:, None, :].expand(batch_size, num_traj, -1).reshape(batch_size * num_traj, 1, -1)
-                target = str(getattr(self._config, 'controller_world_model_inject_target', getattr(self, 'controller_world_model_inject_target', 'all')) or 'all').lower()
-                if target in {'ego', 'ego_only'}:
-                    scene_feature[:, 0:1, :] = scene_feature[:, 0:1, :] + (s * style_bt)
-                else:
-                    scene_feature = scene_feature + (s * style_bt)
-
         # Reshape to fit the latent world model
         fut_scene_feature = self.latent_world_model(scene_feature)  
         # print(f"💚shape of fut_scene_feature: {fut_scene_feature.shape}")#shape of fut_scene_feature: ([4096, 65, 256])
@@ -733,6 +917,37 @@ class WoTEModel(nn.Module):
         # print(f"💚shape of fut_ego_feat: {fut_ego_feat.shape}")#([4096, 1, 256])
         fut_flatten_bev_feature_multi_trajs = fut_scene_feature[:, 1:]
         return fut_ego_feat, fut_flatten_bev_feature_multi_trajs
+
+    def _apply_controller_injection(self, bev_tokens: torch.Tensor, ctrl_token: torch.Tensor) -> torch.Tensor:
+        """
+        Apply controller-conditioned fusion into BEV tokens according to `self.controller_injection_mode`.
+
+        Args:
+            bev_tokens: [B*T, Nq, C]
+            ctrl_token: [B*T, Nq, C]
+
+        Returns:
+            Fused BEV tokens of shape [B*T, Nq, C].
+        """
+        mode = self.controller_injection_mode
+        strength = torch.clamp(torch.tensor(self.controller_injection_strength, device=bev_tokens.device), 0.0, 1.0)
+        if mode == 'film':
+            scale = torch.sigmoid(self.ctrl_film_scale(ctrl_token))
+            shift = self.ctrl_film_shift(ctrl_token)
+            film_out = self.ctrl_film_ln(bev_tokens * scale + shift)
+            return bev_tokens * (1.0 - strength) + film_out * strength
+        elif mode == 'attn':
+            attn_out, _ = self.ctrl_attn(query=bev_tokens, key=ctrl_token, value=ctrl_token)
+            attn_out = self.ctrl_attn_dropout(attn_out)
+            return bev_tokens + strength * attn_out
+        elif mode == 'concat':
+            concat_feat = torch.cat([bev_tokens, ctrl_token], dim=-1)
+            proj_out = self.ctrl_concat_proj(concat_feat)
+            return bev_tokens * (1.0 - strength) + proj_out * strength
+        elif mode == 'add':
+            return bev_tokens + strength * ctrl_token
+        else:
+            return bev_tokens
 
     def _compute_reward_feature(self, fut_ego_feat_list, fut_flatten_bev_feature_multi_trajs_list, batch_size, num_traj, h=8, w=8) -> torch.Tensor:
         """
@@ -974,10 +1189,77 @@ class WoTEModel(nn.Module):
         sim_rewards = [reward.sigmoid() for reward in sim_rewards]  # Apply sigmoid to each metric reward
         final_rewards = self.weighted_reward_calculation(im_rewards_softmax, sim_rewards)
 
+        # Controller-aware planning (CAP): risk penalty from Controller Response Predictor.
+        # Penalize trajectories that are predicted to be harder to track under the active controller dynamics.
+        controller_risk = None
+        if (
+            self.controller_response_predictor is not None
+            and bool(getattr(self._config, 'controller_use_response_predictor', self.controller_use_response_predictor))
+            and (float(getattr(self._config, 'controller_risk_weight', self.controller_risk_weight) or 0.0) > 0.0)
+        ):
+            try:
+                num_traj = int(final_rewards.shape[-1])
+                num_poses = int(getattr(self._config.trajectory_sampling, 'num_poses', 8))
+
+                offset_raw = encoder_results.get('trajectory_offset', None)
+                if offset_raw is not None:
+                    offset_raw = offset_raw.to(device=cluster_feaure.device, dtype=torch.float32)
+
+                # Build candidate trajectories used for scoring: [B, K, T, 3]
+                anchors = self.trajectory_anchors.to(device=cluster_feaure.device, dtype=torch.float32)
+                if anchors.ndim == 3:
+                    anchors_bt = anchors.unsqueeze(0).expand(batch_size, -1, -1, -1)
+                else:
+                    anchors_bt = anchors
+
+                if offset_raw is None:
+                    cand = anchors_bt
+                else:
+                    if offset_raw.ndim == 4:
+                        cand = anchors_bt + offset_raw
+                    elif offset_raw.ndim == 3:
+                        cand = anchors_bt + offset_raw.unsqueeze(0)
+                    else:
+                        cand = anchors_bt
+
+                # Ensure expected pose count
+                if cand.shape[-2] != num_poses:
+                    cand = cand[..., :num_poses, :]
+
+                # Controller embedding (global per batch): [B, 64]
+                ctrl_emb = self._compute_controller_style_emb64(batch_size, cluster_feaure.device)
+
+                # Flatten candidates to batch for predictor
+                ref_flat = cand.reshape(batch_size * num_traj, num_poses, 3)
+                ctrl_flat = ctrl_emb.unsqueeze(1).expand(batch_size, num_traj, -1).reshape(batch_size * num_traj, -1)
+
+                residual_hat = self.controller_response_predictor(ref_flat, ctrl_flat)  # [B*K, T, 3]
+                risk_flat = self.controller_response_predictor.compute_risk(
+                    residual_hat,
+                    xy_weight=float(getattr(self._config, 'controller_risk_xy_weight', self.controller_risk_xy_weight) or 1.0),
+                    yaw_weight=float(getattr(self._config, 'controller_risk_yaw_weight', self.controller_risk_yaw_weight) or 0.2),
+                    reduction='mean',
+                )
+                controller_risk = risk_flat.view(batch_size, num_traj)
+                risk_w = float(getattr(self._config, 'controller_risk_weight', self.controller_risk_weight) or 0.0)
+                final_rewards = final_rewards - (risk_w * controller_risk)
+            except Exception as e:
+                # Keep evaluation robust even if predictor is misconfigured.
+                print(f"⚠️ controller risk penalty skipped: {e}")
+
         # Select the trajectory
         offset = encoder_results['trajectory_offset']  # [B, 256, 8, 3]
         base_anchors = self.trajectory_anchors.to(device=offset.device, dtype=offset.dtype).unsqueeze(0).expand(batch_size, -1, -1, -1)
         trajectory_anchors = base_anchors + offset
+
+        # If eval-time compensation was applied inside extract_trajectory_feature(), prefer that.
+        comp = encoder_results.get('trajectory_anchors_compensated', None)
+        if comp is not None and isinstance(comp, torch.Tensor):
+            try:
+                if comp.shape == trajectory_anchors.shape:
+                    trajectory_anchors = comp.to(device=trajectory_anchors.device, dtype=trajectory_anchors.dtype)
+            except Exception:
+                pass
 #NOTE:为了打印原始轨迹经过仿真器后的情况，需要取消这里的offset加法
         trajectory_anchors_ori=self.trajectory_anchors
         poses = self.select_best_trajectory(final_rewards, trajectory_anchors, batch_size)
@@ -992,6 +1274,8 @@ class WoTEModel(nn.Module):
             "all_trajectory": trajectory_anchors.squeeze(0) if batch_size == 1 else trajectory_anchors,#预测的所有轨迹
             "im_rewards": im_rewards_softmax,#256条轨迹的imitation 得分
         }
+        if controller_risk is not None:
+            results["controller_risk"] = controller_risk
         return results
 
     def forward_train(self, features, targets=None) -> Dict[str, torch.Tensor]:
@@ -1000,6 +1284,17 @@ class WoTEModel(nn.Module):
         result = {}
         encoder_results = self.process_trajectory_and_reward(features, targets)#来自:extract_reward_feature;
         cluster_feaure = encoder_results.pop("reward_feature")#
+
+        # Optional: compute controller-conditioned preference distribution over planner anchors.
+        # This is used as a *style-dependent prior* for training supervision (loss), not as a direct input.
+        # Defaults keep legacy behavior when alpha=0.
+        bias_alpha = float(getattr(self._config, 'controller_im_target_bias_alpha', 0.0) or 0.0)
+        bias_offset = bool(getattr(self._config, 'controller_bias_offset_im_reward', False))
+        if (bias_alpha > 0.0) or bias_offset:
+            result["controller_pref"] = self._compute_controller_pref_over_planner_anchors(
+                batch_size=cluster_feaure.shape[0],
+                device=cluster_feaure.device,
+            )
 
         # Reward each trajectory using MLP head-->将奖励feature映射成为erward数值;
         im_rewards = self.reward_head(cluster_feaure).squeeze(-1)  # Shape: [batch_size, 256]
@@ -1012,12 +1307,55 @@ class WoTEModel(nn.Module):
         sim_rewards = torch.cat(sim_rewards, dim=-1).permute(0, 2, 1).sigmoid()  # Concatenate metric rewards
         result["sim_rewards"] = sim_rewards
 
-        # NOTE: loss computation (WoTE_loss.py) expects offset-related keys regardless of
-        # whether agent/map losses are enabled. Always return encoder_results.
-        result.update(encoder_results)
+        if self.use_agent_loss:
+            result.update(encoder_results)
 
         return result
 
+    def _compute_controller_pref_over_planner_anchors(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """Compute a controller-conditioned *preference prior* over planner anchors.
+
+        The goal is to make supervision style-conditional with minimal changes:
+        - take the active controller style's executed trajectories (controller bank)
+        - measure similarity between each planner anchor trajectory and the set of executed trajectories
+        - convert similarity into a probability distribution over planner anchors
+
+        Returns:
+            controller_pref: [B, num_traj] probability distribution over planner anchors
+        """
+        # Default: uniform (no preference)
+        num_traj = int(self.trajectory_anchors.shape[0])
+        if num_traj <= 0:
+            return torch.empty((batch_size, 0), device=device)
+
+        # If controller bank isn't available, fall back to uniform.
+        if not hasattr(self, '_active_exec_trajs') or (self._active_exec_trajs is None):
+            return torch.full((batch_size, num_traj), 1.0 / num_traj, device=device)
+
+        # Controller executed trajectories for the *active style*.
+        # Expected shape: [N_ctrl, T, D] (e.g., [256, 8, 3])
+        exec_traj = self._active_exec_trajs.to(device=device, dtype=torch.float32)
+        planner_anchors = self.trajectory_anchors.to(device=device, dtype=torch.float32)
+
+        try:
+            exec_flat = exec_traj.reshape(exec_traj.shape[0], -1)  # [N_ctrl, F]
+            plan_flat = planner_anchors.reshape(planner_anchors.shape[0], -1)  # [num_traj, F]
+        except Exception:
+            return torch.full((batch_size, num_traj), 1.0 / num_traj, device=device)
+
+        # Compute distance from each planner anchor to controller's executed trajectory set.
+        # Use min distance as a compatibility score (works even when anchor sets are unrelated).
+        # dist: [num_traj, N_ctrl]
+        dist = torch.cdist(plan_flat, exec_flat, p=2)
+        min_dist = dist.min(dim=1).values  # [num_traj]
+
+        temperature = float(getattr(self._config, 'controller_pref_temperature', 3.0) or 3.0)
+        temperature = max(1e-3, temperature)
+        logits = -min_dist / temperature
+        pref = torch.softmax(logits, dim=0)  # [num_traj]
+        return pref.unsqueeze(0).expand(batch_size, -1).contiguous()
+
+       
     def weighted_reward_calculation(self, im_rewards, sim_rewards) -> torch.Tensor:
         """
         Calculate the final reward for each trajectory based on the given weights.
@@ -1187,6 +1525,55 @@ class WoTEModel(nn.Module):
         bev_np = bev_semantic_map.cpu().numpy()
         bev_np[mask] = self._config.ego_box_map_idx
         return torch.tensor(bev_np, dtype=bev_semantic_map.dtype, device=bev_semantic_map.device)
+
+    #==================== Controller style switching ====================
+    def _maybe_switch_controller_style_for_batch(self):
+        """
+        Always select one controller style per batch using configured probabilities,
+        and set it active for both controller embedding and future BEV target composition.
+        """
+        # 评估阶段切换风格会导致指标随机抖动：默认禁用
+        if getattr(self, 'is_eval', False):
+            return
+
+        sampling = str(getattr(self, 'controller_style_sampling', 'per_batch') or 'per_batch').lower()
+        if sampling in {'fixed', 'none', 'off'}:
+            return
+
+        if not hasattr(self, '_exec_bank') or not isinstance(getattr(self, '_exec_bank'), dict):
+            return
+        if len(self._exec_bank) == 0:
+            return
+
+        # 随机选择一个风格 key
+        import random
+        # 带权采样
+        key = random.choices(self._controller_style_keys, weights=self._controller_style_probs, k=1)[0]
+        self._active_exec_trajs = self._exec_bank[key]
+        self._active_ref_trajs = self._ref_bank[key]
+        try:
+            src = getattr(self, '_exec_bank_src', {}).get(key)
+            if isinstance(src, str) and '::' in src:
+                bundle, rest = src.split('::', 1)
+                import re
+                m = re.search(r"exec\[(\d+)\]", rest)
+                idx_str = m.group(1) if m else key
+                style_label = self._style_names.get(key, None)
+                label_str = style_label if style_label is not None else idx_str
+                print(
+                    f"💜 Switched controller style: {label_str} from bundle {bundle} "
+                    f" || 💜 idx-str is {idx_str} || 💜 mode={self.controller_injection_mode} "
+                    f"|| 💜 strength={self.controller_injection_strength} || 💜 every_step={self.controller_inject_every_step}"
+                )
+            else:
+                print(
+                    f"💜 Switched controller style for batch: {key} "
+                    f"(probs={self._controller_style_probs}) || mode={self.controller_injection_mode} "
+                    f"strength={self.controller_injection_strength} every_step={self.controller_inject_every_step} "
+                    f"|| exec_path={src} ref_path={getattr(self, '_ref_bank_src', {}).get(key)}"
+                )
+        except Exception:
+            pass
 
 class AgentHead(nn.Module):
     def __init__(

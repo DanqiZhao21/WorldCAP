@@ -25,19 +25,38 @@ def compute_wote_loss(
     # offset reward
     trajectory_anchors = predictions["trajectory_anchors"]
     imitation_rewards = predictions["trajectory_offset_rewards"]
-    offset_im_reward_loss = compute_im_reward_loss(targets, imitation_rewards, trajectory_anchors)
+    controller_pref = predictions.get("controller_pref", None)
+    bias_alpha = float(getattr(config, 'controller_im_target_bias_alpha', 0.0) or 0.0)
+    bias_offset = bool(getattr(config, 'controller_bias_offset_im_reward', False))
+    offset_alpha = bias_alpha if bias_offset else 0.0
+    offset_im_reward_loss = compute_im_reward_loss(
+        targets,
+        imitation_rewards,
+        trajectory_anchors,
+        controller_pref=controller_pref,
+        bias_alpha=offset_alpha,
+    )
     loss_dict['offset_im_reward_loss'] = offset_im_reward_loss * config.offset_im_reward_weight
 
     # im & sim rewards
     trajectory_anchors = predictions["trajectory_anchors"]
     imitation_rewards = predictions["im_rewards"]
-    im_reward_loss = compute_im_reward_loss(targets, imitation_rewards, trajectory_anchors)
+    im_reward_loss = compute_im_reward_loss(
+        targets,
+        imitation_rewards,
+        trajectory_anchors,
+        controller_pref=controller_pref,
+        bias_alpha=bias_alpha,
+    )
 
     sim_rewards = predictions["sim_rewards"]
     sim_reward_loss = compute_sim_reward_loss(targets, sim_rewards)
 
-    loss_dict['im_reward_loss'] = im_reward_loss
-    loss_dict['sim_reward_loss'] = sim_reward_loss
+    im_w = float(getattr(config, 'im_loss_weight', 1.0) or 1.0)
+    metric_w = float(getattr(config, 'metric_loss_weight', 1.0) or 1.0)
+
+    loss_dict['im_reward_loss'] = im_reward_loss * im_w
+    loss_dict['sim_reward_loss'] = sim_reward_loss * metric_w
 
     use_agent_loss = config.use_agent_loss if hasattr(config, "use_agent_loss") else True
     if use_agent_loss:
@@ -59,15 +78,19 @@ def compute_wote_loss(
         focal_loss_alpha = config.focal_loss_alpha if hasattr(config, 'focal_loss_alpha') else 0.25
         focal_loss_gamma = config.focal_loss_gamma if hasattr(config, 'focal_loss_gamma') else 2.0
         focal_loss_fn = FocalLoss(alpha=focal_loss_alpha, gamma=focal_loss_gamma)
-        map_loss = focal_loss_fn(predictions["bev_semantic_map"], targets["bev_semantic_map"].long())
-        loss_dict['map_loss'] = map_loss * config.bev_semantic_weight
+        bev_w = float(getattr(config, 'bev_semantic_weight', 0.0) or 0.0)
+        if (bev_w > 0.0) and ("bev_semantic_map" in predictions) and ("bev_semantic_map" in targets):
+            map_loss = focal_loss_fn(predictions["bev_semantic_map"], targets["bev_semantic_map"].long())
+            loss_dict['map_loss'] = map_loss * bev_w
 
         # fut map
-        bz, num_trajs, h, w = targets["fut_bev_semantic_map"].shape
-        gt_fut_bev_semantic_map = targets["fut_bev_semantic_map"].reshape(bz * num_trajs, h, w)
-        focal_loss_fn = FocalLoss(alpha=focal_loss_alpha, gamma=focal_loss_gamma)
-        fut_map_loss = focal_loss_fn(predictions["fut_bev_semantic_map"], gt_fut_bev_semantic_map.long())
-        loss_dict['fut_map_loss'] = fut_map_loss * config.fut_bev_semantic_weight
+        fut_w = float(getattr(config, 'fut_bev_semantic_weight', 0.0) or 0.0)
+        if (fut_w > 0.0) and ("fut_bev_semantic_map" in predictions) and ("fut_bev_semantic_map" in targets):
+            bz, num_trajs, h, w = targets["fut_bev_semantic_map"].shape
+            gt_fut_bev_semantic_map = targets["fut_bev_semantic_map"].reshape(bz * num_trajs, h, w)
+            focal_loss_fn = FocalLoss(alpha=focal_loss_alpha, gamma=focal_loss_gamma)
+            fut_map_loss = focal_loss_fn(predictions["fut_bev_semantic_map"], gt_fut_bev_semantic_map.long())
+            loss_dict['fut_map_loss'] = fut_map_loss * fut_w
 
     return loss_dict
 
@@ -137,6 +160,7 @@ def compute_traj_offset_loss(
     # Compute the L1 loss (Mean Absolute Error) between predicted offsets and ground truth offsets
     # Reduction is 'mean' to average over all samples and trajectory dimensions
     traj_offset_loss = F.l1_loss(selected_predicted_offsets, gt_offsets, reduction='mean')
+    #
 
     return traj_offset_loss
 
@@ -144,6 +168,8 @@ def compute_im_reward_loss(
     targets: Dict[str, torch.Tensor],
     prediction_rewards,
     trajectory_anchors,
+    controller_pref: torch.Tensor | None = None,
+    bias_alpha: float = 0.0,
 ) -> torch.Tensor:
     Bz = targets["trajectory"].shape[0]
     # Get target trajectory
@@ -159,6 +185,15 @@ def compute_im_reward_loss(
     # Apply softmax to L2 distances to get reward targets
     reward_targets = torch.softmax(-l2_distances, dim=-1)  # Shape: [batch_size, 256]
     #哪条 anchor 更接近 ground truth。
+
+    # Optional: bias the GT soft-label distribution by a style-dependent prior.
+    # This makes supervision controller-conditional without changing dataset labels.
+    if controller_pref is not None and bias_alpha and bias_alpha > 0.0:
+        # controller_pref is expected to be a probability distribution over anchors: [B, 256]
+        if controller_pref.dim() == 2 and controller_pref.shape == reward_targets.shape:
+            a = float(max(0.0, min(1.0, bias_alpha)))
+            reward_targets = (1.0 - a) * reward_targets + a * controller_pref.to(reward_targets.device)
+            reward_targets = reward_targets / reward_targets.sum(dim=-1, keepdim=True).clamp_min(1e-6)
     
     # Compute loss using cross-entropy
     prediction_rewards = prediction_rewards.squeeze(-1).clamp(1e-6, 1 - 1e-6)

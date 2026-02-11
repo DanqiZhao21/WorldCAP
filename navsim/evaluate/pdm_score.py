@@ -188,6 +188,7 @@ def pdm_score_multiTraj(
     anchor_save_dir: str | None = None,
     anchor_save_name: str | None = None,
     anchor_overwrite: bool = False,
+    evaluate_all_trajectories: bool = False,
 ) -> PDMResults:
     """
     Runs PDM-Score and saves results in dataclass.
@@ -199,57 +200,96 @@ def pdm_score_multiTraj(
     initial_ego_state = metric_cache.ego_state
     pdm_trajectory = metric_cache.trajectory  # 人类轨迹，为InterpolatedTrajectory对象
 
-    # 将 human baseline 先转为数组，后续与每条预测拼接
+    # 模型选择的索引（基于模型打分）
+    best_idx_model = int(np.argmax(model_scores))
+    pred_idx = best_idx_model + 1  # 与历史约定保持“+1”代表跳过 baseline
+
+    # 将 human baseline 先转为数组
     pdm_states = get_trajectory_as_array(
         pdm_trajectory, future_sampling, initial_ego_state.time_point
     )  # (T, D)
 
-    # 逐轨评估：每次只给 [baseline, 当前预测] 两条，取索引1作为该预测分数
-    per_traj_scores: List[float] = []
-    per_traj_results: List[PDMResults] = []
-    per_traj_oncoming_masks: List[np.ndarray] = []
-    per_traj_oncoming_prog_vals: List[float | None] = []
-    pred_sim_states_list: List[np.ndarray] = []  # 每条预测的模拟结果 (T, D)
-    pred_input_states_list: List[np.ndarray] = []  # 每条预测的输入轨迹 (T, D)
-
-    for traj in model_trajectories:
-        # 预测轨迹转为全局并插值到与仿真一致
-        pred_traj = transform_trajectory(traj, initial_ego_state)
+    # 快速模式：只对模型挑选的那条轨迹计算 PDM（最省时）
+    if not evaluate_all_trajectories:
+        chosen_traj = model_trajectories[best_idx_model]
+        pred_traj = transform_trajectory(chosen_traj, initial_ego_state)
         pred_states = get_trajectory_as_array(
             pred_traj, future_sampling, initial_ego_state.time_point
-        )  # (T, D)
+        )
 
-        # 构造两条 proposal 的批次：[baseline, pred]
-        pair_states = np.concatenate([pdm_states[None, ...], pred_states[None, ...]], axis=0)
-
-        # 仿真两条
-        pair_simulated = simulator.simulate_proposals(pair_states, initial_ego_state)  # (2, T, D)
-
-        # 评分两条
-        pair_scores = scorer.score_proposals(
-            pair_simulated,
+        trajectory_states = np.concatenate([pdm_states[None, ...], pred_states[None, ...]], axis=0)  # (2, T, D)
+        simulated_states = simulator.simulate_proposals(trajectory_states, initial_ego_state)  # (2, T, D)
+        scores = scorer.score_proposals(
+            simulated_states,
             metric_cache.observation,
             metric_cache.centerline,
             metric_cache.route_lane_ids,
             metric_cache.drivable_area_map,
         )
 
-        # 索引1为当前预测的结果
         pred_idx_local = 1
-        score_pred = float(pair_scores[pred_idx_local])
-        per_traj_scores.append(score_pred)
+        score_pred = float(scores[pred_idx_local])
 
-        # 提取各指标并打包为 PDMResults（与单轨一致）
+        pdm_results = PDMResults(
+            scorer._multi_metrics[MultiMetricIndex.NO_COLLISION, pred_idx_local],
+            scorer._multi_metrics[MultiMetricIndex.DRIVABLE_AREA, pred_idx_local],
+            scorer._multi_metrics[MultiMetricIndex.DRIVING_DIRECTION, pred_idx_local],
+            scorer._weighted_metrics[WeightedMetricIndex.PROGRESS, pred_idx_local],
+            scorer._weighted_metrics[WeightedMetricIndex.TTC, pred_idx_local],
+            scorer._weighted_metrics[WeightedMetricIndex.COMFORTABLE, pred_idx_local],
+            score_pred,
+        )
+
+        # 在单轨模式下，“PDM 最优”与“模型选择”一致
+        pdm_best_results = pdm_results
+        best_pdm_idx = pred_idx
+
+        simulated_states_all_egoframe = global_traj_to_ego_all(simulated_states[1:2], initial_ego_state)
+        pred_states_all_ego_frame = global_traj_to_ego_all(trajectory_states[1:2], initial_ego_state)
+
+        return (
+            pdm_results,
+            pdm_best_results,
+            simulated_states_all_egoframe,
+            pred_states_all_ego_frame,
+            best_pdm_idx,
+            pred_idx,
+        )
+
+    # 全量模式：对所有轨迹计算 PDM（用于可视化/分析），采用 batch 一次性仿真/评分
+    pred_input_states_list: List[np.ndarray] = []
+    for traj in model_trajectories:
+        pred_traj = transform_trajectory(traj, initial_ego_state)
+        pred_states = get_trajectory_as_array(
+            pred_traj, future_sampling, initial_ego_state.time_point
+        )
+        pred_input_states_list.append(pred_states)
+
+    # 批量仿真/评分：一次性处理 [baseline + 所有预测]
+    pred_input_all = np.stack(pred_input_states_list, axis=0)  # (N, T, D)
+    trajectory_states = np.concatenate([pdm_states[None, ...], pred_input_all], axis=0)  # (N+1, T, D)
+
+    simulated_states = simulator.simulate_proposals(trajectory_states, initial_ego_state)  # (N+1, T, D)
+    scores = scorer.score_proposals(
+        simulated_states,
+        metric_cache.observation,
+        metric_cache.centerline,
+        metric_cache.route_lane_ids,
+        metric_cache.drivable_area_map,
+    )
+
+    # 每条预测轨迹的分数对应索引 1..N（索引 0 是 baseline）
+    per_traj_scores = [float(s) for s in scores[1:]]
+    per_traj_results: List[PDMResults] = []
+    for pred_idx_local, score_pred in enumerate(per_traj_scores, start=1):
         no_at_fault_collisions = scorer._multi_metrics[MultiMetricIndex.NO_COLLISION, pred_idx_local]
         drivable_area_compliance = scorer._multi_metrics[MultiMetricIndex.DRIVABLE_AREA, pred_idx_local]
-        driving_direction_compliance = scorer._multi_metrics[MultiMetricIndex.DRIVING_DIRECTION, pred_idx_local]
+        driving_direction_compliance = scorer._multi_metrics[
+            MultiMetricIndex.DRIVING_DIRECTION, pred_idx_local
+        ]
         ego_progress = scorer._weighted_metrics[WeightedMetricIndex.PROGRESS, pred_idx_local]
         time_to_collision_within_bound = scorer._weighted_metrics[WeightedMetricIndex.TTC, pred_idx_local]
         comfort = scorer._weighted_metrics[WeightedMetricIndex.COMFORTABLE, pred_idx_local]
-        # try:
-        #     oncoming_progress_val = float(scorer._oncoming_progress_value[pred_idx_local])
-        # except Exception:
-        #     oncoming_progress_val = None
 
         per_traj_results.append(
             PDMResults(
@@ -260,27 +300,10 @@ def pdm_score_multiTraj(
                 time_to_collision_within_bound,
                 comfort,
                 score_pred,
-                # oncoming_progress=oncoming_progress_val,
             )
         )
 
-        # 保存 oncoming mask（用于可视化）
-        # try:
-        #     oncoming_mask_pred = scorer._ego_areas[pred_idx_local, :, EgoAreaIndex.ONCOMING_TRAFFIC]
-        # except Exception:
-        #     oncoming_mask_pred = None
-        # per_traj_oncoming_masks.append(oncoming_mask_pred)
-        # per_traj_oncoming_prog_vals.append(oncoming_progress_val)
-
-        # 累积预测的仿真结果与输入轨迹（均不包含 baseline）
-        pred_sim_states_list.append(pair_simulated[pred_idx_local])  # (T, D)
-        pred_input_states_list.append(pair_states[pred_idx_local])  # (T, D)
-
-    # 模型选择的索引（基于模型打分）
-    best_idx_model = int(np.argmax(model_scores))
-    pred_idx = best_idx_model + 1  # 与历史约定保持“+1”代表跳过 baseline
-
-    # PDM 选择的最佳索引（逐轨独立评估之后的 PDM 分数）
+    # PDM 选择的最佳索引（基于批量评估后的 PDM 分数）
     best_pdm_no_offset = int(np.argmax(per_traj_scores))
     best_pdm_idx = best_pdm_no_offset + 1  # 对齐“+1”约定
 
@@ -301,8 +324,8 @@ def pdm_score_multiTraj(
     # oncoming_mask_best = per_traj_oncoming_masks[best_pdm_no_offset]
 
     # 聚合所有预测的仿真与输入（不含 baseline），并转到 ego frame 的前 3 维
-    pred_sim_all = np.stack(pred_sim_states_list, axis=0)  # (N, T, D)
-    pred_input_all = np.stack(pred_input_states_list, axis=0)  # (N, T, D)
+    pred_sim_all = simulated_states[1:]  # (N, T, D)
+    pred_input_all = trajectory_states[1:]  # (N, T, D)
 
     simulated_states_all_egoframe = global_traj_to_ego_all(pred_sim_all, initial_ego_state)
     pred_states_all_ego_frame = global_traj_to_ego_all(pred_input_all, initial_ego_state)

@@ -12,3 +12,8 @@ defaults:
   - agent: constant_velocity_agent
 
 metric_cache_path: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache # path to metric cache
+
+# PDM evaluation mode for multi-trajectory agents:
+# - false: only compute PDM for the model-selected trajectory (fast, default)
+# - true: compute PDM for all trajectories (slower, useful for visualization)
+evaluate_all_trajectories: false

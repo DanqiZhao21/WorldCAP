@@ -176,6 +176,12 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             if anchor_overwrite is None:
                 anchor_overwrite = getattr(cfg.scorer, 'anchor_overwrite', False)
 
+            # Control whether to compute PDM for all trajectories (slower, for visualization)
+            # or only for the model-selected trajectory (fast, default).
+            evaluate_all_trajectories = getattr(cfg, 'evaluate_all_trajectories', None)
+            if evaluate_all_trajectories is None:
+                evaluate_all_trajectories = getattr(cfg.scorer, 'evaluate_all_trajectories', False)
+
             # logger.info(f"Anchor save opts → dir: {anchor_save_dir}, name: {anchor_save_name}, overwrite: {anchor_overwrite}")
 
             pdm_result, pdm_best_result, simulation_states_all_noHuman, pred_states_all_noHuman, best_pdm_idx,pred_idx =pdm_score_multiTraj(
@@ -189,6 +195,7 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
                 anchor_save_dir=anchor_save_dir,
                 anchor_save_name=anchor_save_name,
                 anchor_overwrite=anchor_overwrite,
+                evaluate_all_trajectories=evaluate_all_trajectories,
             )
             # print(f"💚💚💚 Best PDM idx for token {token} is {best_pdm_idx},   Model_best idx for  is {pred_idx}")
             scene = scene_loader.get_scene_from_token(token)

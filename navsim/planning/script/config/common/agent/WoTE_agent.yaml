@@ -6,10 +6,26 @@ config:
   _convert_: 'all'
   min_lr: 1e-6
   warmup_epochs: 3
-  #这些并没有起作用
-  controller_injection_mode: none
-  controller_inject_every_step: false
-  controller_injection_strength: 0.3
+  # Controller conditioning (simplified; matches WoTEConfig dataclass)
+  controller_injection_mode: film
+  controller_injection_strength: 0.25
+  controller_feature_mode: full
+
+  # Controller-aware BEV world model conditioning
+  controller_condition_on_world_model: true
+  controller_world_model_strength: 0.3
+  # 'all' (ego + BEV tokens) | 'ego' (ego token only)
+  controller_world_model_inject_target: all
+
+  # CAP: condition trajectory feature branch
+  controller_condition_on_traj_feature: true
+  controller_traj_condition_strength: 0.25
+
+  # Also allow controller to affect offset generation and scoring features
+  controller_condition_on_offset: true
+  controller_offset_condition_strength: 0.25
+  controller_condition_on_reward_feature: true
+  controller_reward_condition_strength: 0.35
   controller_ref_traj_path: "/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" #NOTE这个一般不变动
   # 使用单一 .npz 大包进行多风格采样
   controller_exec_traj_path: "/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_styles.npz"

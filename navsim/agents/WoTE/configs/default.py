@@ -136,9 +136,9 @@ class WoTEConfig:
     input_target = True
     use_map_loss: bool = True
     use_focal_loss_for_map = True
-    bev_semantic_weight: float = 10.0
+    bev_semantic_weight: float = 0.5
     future_idx = 11
-    fut_bev_semantic_weight: float = 5.0
+    fut_bev_semantic_weight: float = 0.5
     focal_loss_alpha = 0.5
     focal_loss_gamma = 2.0
     
@@ -149,11 +149,38 @@ class WoTEConfig:
     num_fut_timestep = 1
     use_traj_offset = True
     #NOTE
-    # controller fusion mode: 'film' | 'attn' | 'concat' | 'add'
-    controller_injection_mode: str = 'attn'
-    controller_inject_every_step: bool = False
-    # controller injection strength (0.0 ~ 1.0). Lower to avoid overpowering BEV.
-    controller_injection_strength: float = 1
+    # controller fusion mode (simplified): 'film' | 'add'
+    controller_injection_mode: str = 'film'
+    # controller injection strength (0.0 ~ 1.0)
+    controller_injection_strength: float = 0.25#没有使用了
+
+    # Controller-aware BEV world model conditioning.
+    # These are read via getattr() in the model, but MUST exist in the dataclass
+    # if we want to override them via Hydra CLI.
+    controller_condition_on_world_model: bool = True
+    controller_world_model_strength: float = 0.3
+    # Where to inject controller token in world model input tokens: 'all' | 'ego'
+    controller_world_model_inject_target: str = 'all'
+
+    # controller feature extraction plugin
+    # - 'full': use full controller features
+    # - 'lateral_only': focus on lateral-related dynamics
+    controller_feature_mode: str = 'full'
+
+    # controller global style pooling (used when controller_exec_traj_path is a bank/bundle)
+    # - 'attn': learned attention pooling (default)
+    # - 'mean': average pooling
+    controller_style_pooling: str = 'attn'
+
+    # CAP: inject controller dynamics into trajectory feature branch.
+    controller_condition_on_traj_feature: bool = True
+    controller_traj_condition_strength: float = 0.25
+
+    # Also allow controller to affect offset generation and scoring features.
+    controller_condition_on_offset: bool = True
+    controller_offset_condition_strength: float = 0.25
+    controller_condition_on_reward_feature: bool = True
+    controller_reward_condition_strength: float = 0.35
     #NOTE
     # optmizer
     use_coslr_opt = True
@@ -175,10 +202,10 @@ class WoTEConfig:
     warmup_epochs: int = 3
 
     # loss weight
-    traj_offset_loss_weight = 1.0
-    offset_im_reward_weight = 0.1
-    im_loss_weight = 1.0
-    metric_loss_weight = 1.0
+    traj_offset_loss_weight: float = 1.0
+    offset_im_reward_weight: float = 0.1
+    im_loss_weight: float = 1.0
+    metric_loss_weight: float = 1.0
 
     # def __post_init__(self):
     #     # 默认让 cluster_file_path 与 controller_ref_traj_path 保持一致；
