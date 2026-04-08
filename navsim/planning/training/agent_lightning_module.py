@@ -50,6 +50,7 @@ class AgentLightningModule(pl.LightningModule):
         # Determine controller injection mode (may not be used by newer profiles/models).
         inj_mode = str(getattr(self.agent.config, 'controller_injection_mode', 'film') or 'film').strip().lower()
         pooling = str(getattr(self.agent.config, 'controller_style_pooling', 'attn') or 'attn').strip().lower()
+        wm_fusion = str(getattr(self.agent.config, 'controller_world_model_fusion', 'attn') or 'attn').strip().lower()
 
         if train_profile == "wm_reward_only":
             # New recommended profile for controller-aware latent transition:
@@ -76,6 +77,21 @@ class AgentLightningModule(pl.LightningModule):
             ]
             if pooling == 'attn':
                 trainable_modules.append("ctrl_style_attn")
+
+            # World-model fusion layers (controller -> latent transition).
+            # These must be trainable, otherwise controller conditioning is effectively random/frozen.
+            if wm_fusion in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
+                trainable_modules += [
+                    "ctrl_bank_proj",
+                    "ctrl_bank_ln",
+                    "ctrl_fuse_attn",
+                ]
+            elif wm_fusion.startswith('film'):
+                trainable_modules += [
+                    "ctrl_wm_film_scale",
+                    "ctrl_wm_film_shift",
+                    "ctrl_wm_film_ln",
+                ]
 
             head_modules = []
         elif train_profile == "controller_inject_only":

@@ -21,7 +21,7 @@ CKPT_MAIN=${CKPT_MAIN:-"${ROOT}/trainingResult/ckpts_20260209_170436/epoch=39-st
 CKPT_BASE=${CKPT_BASE:-"${ROOT}/trainingResult/epoch=29-step=19950.ckpt"}
 
 # Controller -> WM knobs (New09 defaults)
-WOTE_WM_STRENGTH=${WOTE_WM_STRENGTH:-"0.9"}
+WOTE_WM_STRENGTH=${WOTE_WM_STRENGTH:-"0.6"}
 WOTE_INJ_STRENGTH=${WOTE_INJ_STRENGTH:-"0.25"}
 
 # Prefer current env python. Override with: export PYTHON=/abs/path/to/python
@@ -46,8 +46,7 @@ echo "[INFO] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # --------------------------------------
 # Concurrency / resource limits (tuning)
 # --------------------------------------
-EVAL_WORKER=${EVAL_WORKER:-"sequential"}          # sequential | single_machine_thread_pool | ray_distributed_no_torch
-EVAL_SINGLE_EVAL=${EVAL_SINGLE_EVAL:-"true"}      # true -> bypass worker_map parallelism
+EVAL_WORKER=${EVAL_WORKER:-"ray_distributed_no_torch"}  # ray_distributed_no_torch | single_machine_thread_pool | sequential
 EVAL_CPU_THREADS=${EVAL_CPU_THREADS:-"1"}         # limit BLAS/OMP threads
 
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
@@ -55,7 +54,7 @@ export MKL_NUM_THREADS=${MKL_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
 export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
 export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
 
-echo "[INFO] EVAL_WORKER=${EVAL_WORKER} EVAL_SINGLE_EVAL=${EVAL_SINGLE_EVAL} EVAL_CPU_THREADS=${EVAL_CPU_THREADS}"
+echo "[INFO] EVAL_WORKER=${EVAL_WORKER} EVAL_CPU_THREADS=${EVAL_CPU_THREADS}"
 echo "[INFO] OMP_NUM_THREADS=${OMP_NUM_THREADS} MKL_NUM_THREADS=${MKL_NUM_THREADS} OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS} NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS}"
 
 # Runtime env (make sure local packages are importable without pip install -e)
@@ -158,6 +157,7 @@ run_one() {
         --out "${exec_anchor_path}" \
         --tracker-style "${tracker_style}" \
         --post-style "${post_style}" \
+        --apply-mode online \
         --heading-scale "${heading_scale}" \
         --heading-bias "${heading_bias}" \
         --speed-scale "${speed_scale}" \
@@ -175,11 +175,11 @@ run_one() {
     "agent.checkpoint_path='${ckpt_path}'"
     "experiment_name=${EXP_ROOT}/${ckpt_tag}/${tag}"
     "worker=${EVAL_WORKER}"
-    "+single_eval=${EVAL_SINGLE_EVAL}"
     "split=${SPLIT}"
     "scene_filter=${SCENE_FILTER}"
     "simulator.tracker_style=${tracker_style}"
     "simulator.post_style=${post_style}"
+    "+simulator.post_params.apply_mode=online"
     "simulator.post_params.heading_scale=${heading_scale}"
     "simulator.post_params.heading_bias=${heading_bias}"
     "simulator.post_params.speed_scale=${speed_scale}"

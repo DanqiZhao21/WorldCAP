@@ -392,7 +392,12 @@ class PDMScorer:
         """
         drivable_area_compliance_scores = np.ones(self._num_proposals, dtype=np.float64)
         off_road_mask = self._ego_areas[:, :, EgoAreaIndex.NON_DRIVABLE_AREA].any(axis=-1)
+        #shape = (num_proposals, num_timesteps, num_area_types)形状为 涉及到了任意时间步（前向rollout的整条轨迹的时间步）
+        #只要整个时间序列中有一次出界 → 就标记为 True  ；；.any(axis=-1)
         drivable_area_compliance_scores[off_road_mask] = 0.0
+        #scores = [1, 1, 1, 1, 1]
+        # mask   = [F, T, F, T, F]
+        #scores = [1, 0, 1, 0, 1]
         self._multi_metrics[MultiMetricIndex.DRIVABLE_AREA] = drivable_area_compliance_scores
 
     def _calculate_driving_direction_compliance(self) -> None:
@@ -404,21 +409,22 @@ class PDMScorer:
             (self._num_proposals, self.proposal_sampling.num_poses + 1),
             dtype=np.float64,
         )
+        #统计未来rolloyt的
         oncoming_progress[:, 1:] = (
             (center_coordinates[:, 1:] - center_coordinates[:, :-1]) ** 2.0
         ).sum(axis=-1) ** 0.5
 
-        # mask out progress along the driving direction
+        # mask out progress along the driving direction 只保留在逆行区域的移动。
         oncoming_traffic_masks = self._ego_areas[:, :, EgoAreaIndex.ONCOMING_TRAFFIC]
         oncoming_progress[~oncoming_traffic_masks] = 0.0
 
         # aggregate
         driving_direction_compliance_scores = np.ones(self._num_proposals, dtype=np.float64)
 
-        horizon = int(
+        horizon = int(#horizon = 10  1s/0.1s
             self._config.driving_direction_horizon / self.proposal_sampling.interval_length
         )
-
+        #对每个 proposal，计算任意 1 秒窗口内 在逆行区域里移动的总距离
         oncoming_progress_over_horizon = np.array(
             [
                 sum(oncoming_progress[max(0, time_idx - horizon) : time_idx + 1])

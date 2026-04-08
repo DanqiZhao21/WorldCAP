@@ -17,13 +17,15 @@ GEN_ANCHOR_SCRIPT=${GEN_ANCHOR_SCRIPT:-"${ROOT}/tool/evaluate/generate_exec_anch
 # Compare two checkpoints:
 # - CKPT_MAIN: your latest trained ckpt
 # - CKPT_BASE: original/base ckpt for comparison
-CKPT_MAIN=${CKPT_MAIN:-"${ROOT}/trainingResult/ckpts_20260209_105105/epoch=39-step=42560.ckpt"}
+#${ROOT}/trainingResult/ckpts_20260209_105105/epoch=39-step=42560.ckpt这个应该是06的
+# /home/zhaodanqi/clone/WoTE/trainingResult/ckpts_20260207_000522/epoch=39-step=53200.ckpt这个应该是03的
+CKPT_MAIN=${CKPT_MAIN:-"${ROOT}/trainingResult/ckpts_20260207_000522/epoch=39-step=53200.ckpt"}
 CKPT_BASE=${CKPT_BASE:-"${ROOT}/trainingResult/epoch=29-step=19950.ckpt"}
 
 # Controller -> WM knobs (New06 defaults)
 # You can override at runtime, e.g.:
 #   WOTE_WM_STRENGTH=0.6 WOTE_INJ_STRENGTH=0.25 bash tool/evaluate/evaluate_ckpt_20260207_000522_wm_multi_sim——NEW.sh
-WOTE_WM_STRENGTH=${WOTE_WM_STRENGTH:-"0.6"}
+WOTE_WM_STRENGTH=${WOTE_WM_STRENGTH:-"0.3"}
 WOTE_INJ_STRENGTH=${WOTE_INJ_STRENGTH:-"0.25"}
 
 # Prefer current env python. Override with: export PYTHON=/abs/path/to/python
@@ -50,8 +52,7 @@ echo "[INFO] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 # --------------------------------------
 # By default, evaluation can spawn many CPU threads (ray/threadpool + BLAS).
 # These knobs help avoid CPU/memory spikes on shared servers.
-EVAL_WORKER=${EVAL_WORKER:-"sequential"}          # sequential | single_machine_thread_pool | ray_distributed_no_torch
-EVAL_SINGLE_EVAL=${EVAL_SINGLE_EVAL:-"true"}      # true -> bypass worker_map parallelism
+EVAL_WORKER=${EVAL_WORKER:-"ray_distributed_no_torch"}  # ray_distributed_no_torch | single_machine_thread_pool | sequential
 EVAL_CPU_THREADS=${EVAL_CPU_THREADS:-"1"}         # limit BLAS/OMP threads
 
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
@@ -59,7 +60,7 @@ export MKL_NUM_THREADS=${MKL_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
 export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
 export NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-"${EVAL_CPU_THREADS}"}
 
-echo "[INFO] EVAL_WORKER=${EVAL_WORKER} EVAL_SINGLE_EVAL=${EVAL_SINGLE_EVAL} EVAL_CPU_THREADS=${EVAL_CPU_THREADS}"
+echo "[INFO] EVAL_WORKER=${EVAL_WORKER} EVAL_CPU_THREADS=${EVAL_CPU_THREADS}"
 echo "[INFO] OMP_NUM_THREADS=${OMP_NUM_THREADS} MKL_NUM_THREADS=${MKL_NUM_THREADS} OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS} NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS}"
 
 # Runtime env (make sure local packages are importable without pip install -e)
@@ -111,8 +112,8 @@ if [[ ! -f "${GEN_ANCHOR_SCRIPT}" ]]; then
   exit 1
 fi
 
-# Output root (under ${NAVSIM_EXP_ROOT})
-EXP_ROOT=${EXP_ROOT:-"eval/WoTE/ckpt_compare_20260207_wm/multi_simNew06"}
+# Output root (under ${NAVSIM_EXP_ROOT})7
+EXP_ROOT=${EXP_ROOT:-"eval/WoTE/ckpt_compare_20260207_wm/02-19-17_simNew06"}
 
 echo "============================================================"
 echo "[EVAL] ckpt_main=${CKPT_MAIN}"
@@ -162,6 +163,7 @@ run_one() {
         --out "${exec_anchor_path}" \
         --tracker-style "${tracker_style}" \
         --post-style "${post_style}" \
+        --apply-mode online \
         --heading-scale "${heading_scale}" \
         --heading-bias "${heading_bias}" \
         --speed-scale "${speed_scale}" \
@@ -179,11 +181,11 @@ run_one() {
     "agent.checkpoint_path='${ckpt_path}'"
     "experiment_name=${EXP_ROOT}/${ckpt_tag}/${tag}"
     "worker=${EVAL_WORKER}"
-    "+single_eval=${EVAL_SINGLE_EVAL}"
     "split=${SPLIT}"
     "scene_filter=${SCENE_FILTER}"
     "simulator.tracker_style=${tracker_style}"
     "simulator.post_style=${post_style}"
+    "simulator.post_params.apply_mode=online"
     "simulator.post_params.heading_scale=${heading_scale}"
     "simulator.post_params.heading_bias=${heading_bias}"
     "simulator.post_params.speed_scale=${speed_scale}"
@@ -226,16 +228,16 @@ run_matrix_interleaved() {
   # 10 scenarios (5-10 requested): tracker styles + post styles + noise stress.
   # Run main then base for each scenario to avoid waiting for all main to finish.
   local scenarios=(
-    "S07_unstable_none|unstable|none|1.0|1.0|0|0|0"
+    # "S07_unstable_none|unstable|none|1.0|1.0|0|0|0"
     "S08_yaw_scale_12|default|yaw_scale|1.2|1.0|0|0|0"
     "S09_speed_scale_08|default|speed_scale|1.0|0.8|0|0|0"
-    "S10_noise_02|default|none|1.0|1.0|0|0|0.2"
-    "S01_default_none|default|none|1.0|1.0|0|0|0"
+    # "S10_noise_02|default|none|1.0|1.0|0|0|0.2"
+    # "S01_default_none|default|none|1.0|1.0|0|0|0"
     "S02_default_post1515|default|yaw_speed_extreme|1.5|1.5|0|0|0"
-    "S03_aggressive_none|aggressive|none|1.0|1.0|0|0|0"
-    "S04_safe_none|safe|none|1.0|1.0|0|0|0"
-    "S05_sluggish_none|sluggish|none|1.0|1.0|0|0|0"
-    "S06_high_jitter_none|high_jitter|none|1.0|1.0|0|0|0"
+    # "S03_aggressive_none|aggressive|none|1.0|1.0|0|0|0"
+    # "S04_safe_none|safe|none|1.0|1.0|0|0|0"
+    # "S05_sluggish_none|sluggish|none|1.0|1.0|0|0|0"
+    # "S06_high_jitter_none|high_jitter|none|1.0|1.0|0|0|0"
   )
 
   local spec tag tracker_style post_style heading_scale speed_scale heading_bias speed_bias noise_std

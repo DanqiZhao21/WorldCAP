@@ -2,7 +2,6 @@ import numpy as np
 import numpy.typing as npt
 from nuplan.common.actor_state.ego_state import EgoState
 import copy
-import os
 from typing import Optional, Dict, Any
 from nuplan.common.actor_state.state_representation import TimeDuration, TimePoint
 from nuplan.planning.simulation.simulation_time_controller.simulation_iteration import (
@@ -45,90 +44,20 @@ class PDMSimulator:
         # time parameters
         self.proposal_sampling = proposal_sampling
 
-        # Track last applied bundle style to avoid redundant tracker reconstruction.
-        self._bundle_last_path = None
-        self._bundle_last_idx = None
-
-        # Optional: override tracker/post params from a controller bundle style.
-        # This is meant for evaluation/diagnostics where simulator perturbation must match the
-        # controller embedding style. Keeping it env-driven avoids complex Hydra dict overrides.
-        #
-        # Env:
-        # - PDM_SIM_BUNDLE_PATH=/abs/or/rel/path/to/controller_styles.npz
-        # - PDM_SIM_STYLE_IDX=<int>
-        # - PDM_SIM_BUNDLE_APPLY=all|tracker|post (default: all)
-        # - PDM_SIM_BUNDLE_DEBUG=1 prints chosen style
-        bundle_path = os.environ.get("PDM_SIM_BUNDLE_PATH", "").strip()
-        bundle_style_idx = os.environ.get("PDM_SIM_STYLE_IDX", "").strip()
-        bundle_apply = (os.environ.get("PDM_SIM_BUNDLE_APPLY", "all") or "all").strip().lower()
-        if bundle_path and bundle_style_idx:
-            try:
-                idx = int(bundle_style_idx)
-                if not os.path.isabs(bundle_path):
-                    bundle_path = os.path.abspath(bundle_path)
-
-                # small in-process cache to avoid repeated np.load
-                if not hasattr(PDMSimulator, "_BUNDLE_CACHE"):
-                    PDMSimulator._BUNDLE_CACHE = {}
-                cache: Dict[str, Any] = getattr(PDMSimulator, "_BUNDLE_CACHE")
-                if bundle_path not in cache:
-                    cache[bundle_path] = np.load(bundle_path, allow_pickle=True)
-                data = cache[bundle_path]
-
-                style_names = data.get("style_names", None)
-                lqr_arr = data.get("lqr_params", None)
-                post_arr = data.get("post_params", None)
-                num_styles = int(style_names.shape[0]) if style_names is not None else int(lqr_arr.shape[0])
-                idx = max(0, min(num_styles - 1, idx))
-
-                if bundle_apply in ["all", "tracker"] and lqr_arr is not None:
-                    lqr_val = lqr_arr[idx]
-                    if hasattr(lqr_val, "item") and not isinstance(lqr_val, dict):
-                        lqr_val = lqr_val.item()
-                    if isinstance(lqr_val, dict):
-                        tracker_params = dict(lqr_val)
-
-                if bundle_apply in ["all", "post"] and post_arr is not None:
-                    post_val = post_arr[idx]
-                    if hasattr(post_val, "item") and not isinstance(post_val, dict):
-                        post_val = post_val.item()
-                    if isinstance(post_val, dict):
-                        post_params = dict(post_val)
-                        # Infer style name from params if present.
-                        post_style = str(post_params.get("style", post_style or "none") or "none")
-
-                if os.environ.get("PDM_SIM_BUNDLE_DEBUG", "0") == "1":
-                    label = None
-                    try:
-                        if style_names is not None:
-                            label = str(list(style_names)[idx])
-                    except Exception:
-                        label = None
-                    print(
-                        f"💗 PDM_SIM bundle override: idx={idx}"
-                        + (f" name={label}" if label else "")
-                        + f" apply={bundle_apply}"
-                    )
-            except Exception:
-                pass
-
         # simulation objects
         self._motion_model = BatchKinematicBicycleModel()
 
         # LQR tracker selection: explicit instance -> params -> style preset
         if tracker is not None:
-            if os.environ.get("PDM_SIM_VERBOSE", "0") == "1":
-                print("💗tracker style: custom-instance")
+            print("💗tracker style: custom-instance")
             self._tracker = tracker
         elif tracker_params is not None:
-            if os.environ.get("PDM_SIM_VERBOSE", "0") == "1":
-                print("💗tracker style: custom-params")
+            print("💗tracker style: custom-params")
             self._tracker = BatchLQRTracker(**tracker_params)
         else:
             # LQR tracker style selection (configurable via Hydra: simulator.tracker_style=...)
             style = (tracker_style or 'default').lower()
-            if os.environ.get("PDM_SIM_VERBOSE", "0") == "1":
-                print("💗tracker style:", style)
+            print("💗tracker style:", style)
             # import ipdb; ipdb.set_trace()
             if style == 'default':
                 self._tracker = BatchLQRTracker()
@@ -212,143 +141,6 @@ class PDMSimulator:
         # - 'online': apply at every rollout step (affects subsequent dynamics)
         # - 'auto'  : online only when params actually change something (scale/bias/noise)
         self._post_apply_mode = (self._post_params.get('apply_mode', post_apply_mode) or 'auto').lower()
-
-    def _bundle_load(self, bundle_path: str) -> Optional[Dict[str, Any]]:
-        """Load controller bundle with a small in-process cache."""
-        if not bundle_path:
-            return None
-        if not os.path.isabs(bundle_path):
-            bundle_path = os.path.abspath(bundle_path)
-        if not os.path.isfile(bundle_path):
-            return None
-        if not hasattr(PDMSimulator, "_BUNDLE_CACHE"):
-            PDMSimulator._BUNDLE_CACHE = {}
-        cache: Dict[str, Any] = getattr(PDMSimulator, "_BUNDLE_CACHE")
-        if bundle_path not in cache:
-            cache[bundle_path] = np.load(bundle_path, allow_pickle=True)
-        return cache[bundle_path]
-
-    def _bundle_num_styles(self, data: Dict[str, Any]) -> int:
-        style_names = data.get("style_names", None)
-        lqr_arr = data.get("lqr_params", None)
-        if style_names is not None:
-            return int(style_names.shape[0])
-        if lqr_arr is not None:
-            return int(lqr_arr.shape[0])
-        post_arr = data.get("post_params", None)
-        if post_arr is not None:
-            return int(post_arr.shape[0])
-        return 0
-
-    def _bundle_pick_idx(self, data: Dict[str, Any], split: Optional[str]) -> Optional[int]:
-        num_styles = self._bundle_num_styles(data)
-        if num_styles <= 0:
-            return None
-
-        pool = None
-        split = (split or '').strip().lower()
-        if split in {'train', 'val'}:
-            key = 'train_style_indices' if split == 'train' else 'val_style_indices'
-            pool = data.get(key, None)
-        try:
-            if pool is not None and len(pool) > 0:
-                import random
-                idx = int(random.choice(list(pool)))
-            else:
-                import random
-                idx = random.randrange(num_styles)
-        except Exception:
-            import random
-            idx = random.randrange(num_styles)
-        return max(0, min(num_styles - 1, int(idx)))
-
-    def _bundle_apply_style(self, data: Dict[str, Any], idx: int, apply: str) -> None:
-        """Apply bundle style by overwriting tracker/post params."""
-        apply = (apply or 'all').strip().lower()
-
-        lqr_arr = data.get("lqr_params", None)
-        post_arr = data.get("post_params", None)
-
-        if apply in ["all", "tracker"] and lqr_arr is not None:
-            lqr_val = lqr_arr[idx]
-            if hasattr(lqr_val, "item") and not isinstance(lqr_val, dict):
-                lqr_val = lqr_val.item()
-            if isinstance(lqr_val, dict):
-                tracker_params = dict(lqr_val)
-                self._tracker = BatchLQRTracker(**tracker_params)
-
-        if apply in ["all", "post"] and post_arr is not None:
-            post_val = post_arr[idx]
-            if hasattr(post_val, "item") and not isinstance(post_val, dict):
-                post_val = post_val.item()
-            if isinstance(post_val, dict):
-                self._post_params = dict(post_val)
-                self._post_style = str(self._post_params.get('style', self._post_style or 'none') or 'none').lower()
-                self._post_apply_mode = (self._post_params.get('apply_mode', self._post_apply_mode) or 'auto').lower()
-
-    def _maybe_override_from_bundle_env(self) -> None:
-        """Optionally override/swap simulator style from bundle for matched evaluation.
-
-        Supported env:
-          - PDM_SIM_BUNDLE_PATH
-          - PDM_SIM_STYLE_IDX (if set: force)
-          - PDM_SIM_EVAL_SAMPLE=1 (if set and STYLE_IDX not set: sample each call)
-          - PDM_SIM_STYLE_SPLIT=train|val (optional pool restriction)
-          - PDM_SIM_BUNDLE_APPLY=all|tracker|post
-        """
-        bundle_path = os.environ.get("PDM_SIM_BUNDLE_PATH", "").strip()
-        if not bundle_path:
-            return
-        data = self._bundle_load(bundle_path)
-        if data is None:
-            return
-
-        apply = (os.environ.get("PDM_SIM_BUNDLE_APPLY", "all") or "all").strip().lower()
-        idx_str = os.environ.get("PDM_SIM_STYLE_IDX", "").strip()
-
-        idx = None
-        if idx_str != '':
-            try:
-                idx = int(idx_str)
-            except Exception:
-                idx = None
-        elif os.environ.get('PDM_SIM_EVAL_SAMPLE', '0') == '1':
-            split = os.environ.get('PDM_SIM_STYLE_SPLIT', '').strip().lower() or None
-            idx = self._bundle_pick_idx(data, split)
-            if idx is not None:
-                os.environ['PDM_SIM_STYLE_IDX'] = str(int(idx))
-        else:
-            return
-
-        if idx is None:
-            return
-
-        num_styles = self._bundle_num_styles(data)
-        if num_styles <= 0:
-            return
-        idx = max(0, min(num_styles - 1, int(idx)))
-
-        abs_path = os.path.abspath(bundle_path)
-        if self._bundle_last_path == abs_path and self._bundle_last_idx == idx:
-            return
-        self._bundle_last_path = abs_path
-        self._bundle_last_idx = idx
-
-        self._bundle_apply_style(data, idx, apply)
-
-        if os.environ.get("PDM_SIM_BUNDLE_DEBUG", "0") == "1":
-            style_names = data.get('style_names', None)
-            label = None
-            try:
-                if style_names is not None:
-                    label = str(list(style_names)[idx])
-            except Exception:
-                label = None
-            print(
-                f"💗 PDM_SIM bundle override(call): idx={idx}"
-                + (f" name={label}" if label else "")
-                + f" apply={apply}"
-            )
 
 
     def _post_effective(self) -> bool:
@@ -583,9 +375,6 @@ class PDMSimulator:
         :param states: proposal states as array
         :return: simulated proposal states as array
         """
-
-        # Optional: per-call bundle override/sampling (for eval-time matched style).
-        self._maybe_override_from_bundle_env()
 
         # TODO: find cleaner way to load parameters
         # set parameters of motion model and tracker

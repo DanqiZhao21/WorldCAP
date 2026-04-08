@@ -73,14 +73,8 @@ def main(cfg: DictConfig) -> None:
         for log_file, tokens_list in scene_loader.get_tokens_list_per_log().items()
     ]
 
-    single_eval = getattr(cfg, 'single_eval', False)
-    # single-threaded worker_map
-    if single_eval:
-        print("Running single-threaded worker_map")
-        score_rows = run_pdm_score(data_points)
-    else:
-    # mutli-threaded worker_map
-        score_rows: List[Tuple[Dict[str, Any], int, int]] = worker_map(worker, run_pdm_score, data_points)
+    # Always use worker_map; it will dispatch through Ray when cfg.worker is ray_distributed_*.
+    score_rows = worker_map(worker, run_pdm_score, data_points)
     
 
     pdm_score_df = pd.DataFrame(score_rows)

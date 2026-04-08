@@ -138,7 +138,7 @@ class WoTEConfig:
     use_focal_loss_for_map = True
     bev_semantic_weight: float = 0.5
     future_idx = 11
-    fut_bev_semantic_weight: float = 0.5
+    fut_bev_semantic_weight: float = 0.5#改到了1
     focal_loss_alpha = 0.5
     focal_loss_gamma = 2.0
     
@@ -158,9 +158,21 @@ class WoTEConfig:
     # These are read via getattr() in the model, but MUST exist in the dataclass
     # if we want to override them via Hydra CLI.
     controller_condition_on_world_model: bool = True
+    # Fusion mode used in WoTE_model.py for world-model conditioning.
+    # - 'attn': cross-attention over controller bank embeddings (default)
+    # - 'film': FiLM-style token modulation (scale+shift) blended by controller_world_model_strength
+    # - 'add' : legacy additive injection with controller_world_model_strength
+    controller_world_model_fusion: str = 'attn'
     controller_world_model_strength: float = 0.3
     # Where to inject controller token in world model input tokens: 'all' | 'ego'
     controller_world_model_inject_target: str = 'all'
+
+    # If True, inject controller only at the first world-model step (step 0).
+    # Default False keeps the historical behavior: inject at every world-model step.
+    controller_world_model_inject_first_step_only: bool = False
+
+    # Only used when controller_world_model_fusion='attn'
+    controller_world_model_attn_heads: int = 8
 
     # controller feature extraction plugin
     # - 'full': use full controller features
@@ -179,8 +191,17 @@ class WoTEConfig:
     # Also allow controller to affect offset generation and scoring features.
     controller_condition_on_offset: bool = True
     controller_offset_condition_strength: float = 0.25
+    # New name used by offset-branch injection (kept separate from historical name above).
+    controller_offset_inject_strength: float = 0.3
     controller_condition_on_reward_feature: bool = True
     controller_reward_condition_strength: float = 0.35
+
+    # ===== controller execution (response predictor) =====
+    controller_execute_predicted_traj: bool = True
+    controller_execute_apply_in_train: bool = True
+    controller_execute_apply_in_eval: bool = False
+    controller_response_predictor_path: str = "/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_response_predictor.pt"
+    controller_response_predictor_trainable: bool = False
     #NOTE
     # optmizer
     use_coslr_opt = True

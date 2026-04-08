@@ -92,6 +92,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tracker-style", default="default", type=str)
     p.add_argument("--post-style", default="none", type=str)
 
+    # How post transform is applied inside PDMSimulator.
+    # online: applied at each rollout step (affects x/y)
+    # offline: applied once after rollout (legacy)
+    # auto: online only when params are non-default
+    p.add_argument("--apply-mode", default="online", type=str, choices=["online", "offline", "auto"])
+
     p.add_argument("--heading-scale", default=1.0, type=float)
     p.add_argument("--heading-bias", default=0.0, type=float)
     p.add_argument("--speed-scale", default=1.0, type=float)
@@ -131,6 +137,7 @@ def main() -> None:
 
     post_params = {
         "style": args.post_style,
+        "apply_mode": args.apply_mode,
         "heading_scale": float(args.heading_scale),
         "heading_bias": float(args.heading_bias),
         "speed_scale": float(args.speed_scale),

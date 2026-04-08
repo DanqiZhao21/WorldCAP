@@ -31,8 +31,8 @@ CKPT_BASE=${CKPT_BASE:-"${ROOT}/trainingResult/epoch=29-step=19950.ckpt"}
 CKPT_MAIN_06=${CKPT_MAIN_06:-"${CKPT_MAIN}"}
 CKPT_MAIN_09=${CKPT_MAIN_09:-"${CKPT_MAIN}"}
 
-EXP_ROOT_06=${EXP_ROOT_06:-"eval/WoTE/ckpt_compare_20260207_wm/multi_simNew06"}
-EXP_ROOT_09=${EXP_ROOT_09:-"eval/WoTE/ckpt_compare_20260207_wm/multi_simNew09"}
+EXP_ROOT_06=${EXP_ROOT_06:-"eval/WoTE/ckpt_compare_20260207_wm/0219_simNew03"}
+EXP_ROOT_09=${EXP_ROOT_09:-"eval/WoTE/ckpt_compare_20260207_wm/0219_simNew06"}
 
 WOTE_INJ_STRENGTH_06=${WOTE_INJ_STRENGTH_06:-"0.25"}
 WOTE_INJ_STRENGTH_09=${WOTE_INJ_STRENGTH_09:-"0.25"}
@@ -45,7 +45,7 @@ echo "  CKPT_BASE=${CKPT_BASE}"
 echo "  EXP_ROOT_06=${EXP_ROOT_06}"
 echo "  EXP_ROOT_09=${EXP_ROOT_09}"
 echo "  inj06=${WOTE_INJ_STRENGTH_06} inj09=${WOTE_INJ_STRENGTH_09}"
-echo "  EVAL_WORKER=${EVAL_WORKER:-<inherit>} EVAL_SINGLE_EVAL=${EVAL_SINGLE_EVAL:-<inherit>} EVAL_CPU_THREADS=${EVAL_CPU_THREADS:-<inherit>}"
+echo "  EVAL_WORKER=${EVAL_WORKER:-<inherit>} EVAL_CPU_THREADS=${EVAL_CPU_THREADS:-<inherit>}"
 echo "  EVAL_NICE=${EVAL_NICE:-<none>}"
 echo "============================================================"
 
@@ -58,7 +58,7 @@ echo "[STEP] Running New06 (wm_strength=0.6) ..."
 CKPT_MAIN="${CKPT_MAIN_06}" \
 CKPT_BASE="${CKPT_BASE}" \
 EXP_ROOT="${EXP_ROOT_06}" \
-WOTE_WM_STRENGTH=0.6 \
+WOTE_WM_STRENGTH=0.3 \
 WOTE_INJ_STRENGTH="${WOTE_INJ_STRENGTH_06}" \
 "${NICE_PREFIX[@]}" bash "${SCRIPT_06}"
 
@@ -66,7 +66,7 @@ echo "[STEP] Running New09 (wm_strength=0.9) ..."
 CKPT_MAIN="${CKPT_MAIN_09}" \
 CKPT_BASE="${CKPT_BASE}" \
 EXP_ROOT="${EXP_ROOT_09}" \
-WOTE_WM_STRENGTH=0.9 \
+WOTE_WM_STRENGTH=0.6 \
 WOTE_INJ_STRENGTH="${WOTE_INJ_STRENGTH_09}" \
 "${NICE_PREFIX[@]}" bash "${SCRIPT_09}"
 
