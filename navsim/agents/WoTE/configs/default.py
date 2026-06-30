@@ -123,15 +123,10 @@ class WoTEConfig:
     num_traj_anchor: int = 256
     
     use_sim_reward: bool = True
-    #NOTE
     sim_reward_dict_path: str = f'/home/zhaodanqi/clone/WoTE/extra_data/planning_vb/formatted_pdm_score_256.npy'
     cluster_file_path: str='/home/zhaodanqi/clone/WoTE/extra_data/planning_vb/trajectory_anchors_256.npy' #NOTE 这个一般也不变动
-    controller_ref_traj_path: str = "/home/zhaodanqi/clone/WoTE/ControllerExp/Anchors_Original_256_centered.npy" #NOTE这个一般不变动
-    controller_exec_traj_path: str = "/home/zhaodanqi/clone/WoTE/ControllerExp/LAB0_Original/Anchor_NavsimSimulation_256_3.npy"
-    #NOTE
     num_plan_queries: int = 32
-
-    use_agent_loss: bool = True
+    
     # map loss
     input_target = True
     use_map_loss: bool = True
@@ -148,61 +143,7 @@ class WoTEConfig:
     # recurrent
     num_fut_timestep = 1
     use_traj_offset = True
-    #NOTE
-    # controller fusion mode (simplified): 'film' | 'add'
-    controller_injection_mode: str = 'film'
-    # controller injection strength (0.0 ~ 1.0)
-    controller_injection_strength: float = 0.25#没有使用了
 
-    # Controller-aware BEV world model conditioning.
-    # These are read via getattr() in the model, but MUST exist in the dataclass
-    # if we want to override them via Hydra CLI.
-    controller_condition_on_world_model: bool = True
-    # Fusion mode used in WoTE_model.py for world-model conditioning.
-    # - 'attn': cross-attention over controller bank embeddings (default)
-    # - 'film': FiLM-style token modulation (scale+shift) blended by controller_world_model_strength
-    # - 'add' : legacy additive injection with controller_world_model_strength
-    controller_world_model_fusion: str = 'attn'
-    controller_world_model_strength: float = 0.3
-    # Where to inject controller token in world model input tokens: 'all' | 'ego'
-    controller_world_model_inject_target: str = 'all'
-
-    # If True, inject controller only at the first world-model step (step 0).
-    # Default False keeps the historical behavior: inject at every world-model step.
-    controller_world_model_inject_first_step_only: bool = False
-
-    # Only used when controller_world_model_fusion='attn'
-    controller_world_model_attn_heads: int = 8
-
-    # controller feature extraction plugin
-    # - 'full': use full controller features
-    # - 'lateral_only': focus on lateral-related dynamics
-    controller_feature_mode: str = 'full'
-
-    # controller global style pooling (used when controller_exec_traj_path is a bank/bundle)
-    # - 'attn': learned attention pooling (default)
-    # - 'mean': average pooling
-    controller_style_pooling: str = 'attn'
-
-    # CAP: inject controller dynamics into trajectory feature branch.
-    controller_condition_on_traj_feature: bool = True
-    controller_traj_condition_strength: float = 0.25
-
-    # Also allow controller to affect offset generation and scoring features.
-    controller_condition_on_offset: bool = True
-    controller_offset_condition_strength: float = 0.25
-    # New name used by offset-branch injection (kept separate from historical name above).
-    controller_offset_inject_strength: float = 0.3
-    controller_condition_on_reward_feature: bool = True
-    controller_reward_condition_strength: float = 0.35
-
-    # ===== controller execution (response predictor) =====
-    controller_execute_predicted_traj: bool = True
-    controller_execute_apply_in_train: bool = True
-    controller_execute_apply_in_eval: bool = False
-    controller_response_predictor_path: str = "/home/zhaodanqi/clone/WoTE/ControllerExp/generated/controller_response_predictor.pt"
-    controller_response_predictor_trainable: bool = False
-    #NOTE
     # optmizer
     use_coslr_opt = True
     lr_steps = [70] # not used
@@ -218,18 +159,29 @@ class WoTEConfig:
         }
     }
     max_epochs = 100
-    # learning rate floor and warmup epochs for cosine scheduler
-    min_lr: float = 1e-6
-    warmup_epochs: int = 3
-
+    
     # loss weight
     traj_offset_loss_weight: float = 1.0
     offset_im_reward_weight: float = 0.1
     im_loss_weight: float = 1.0
     metric_loss_weight: float = 1.0
+    
+    # controller bank 只服务 BEV latent world model；不直接替换 planner 候选轨迹。
+    # 如果 exec 路径是 .npz bundle，模型会优先读取 bundle 内部的 ref_traj。
+    controller_ref_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/Anchors_Original_256_centered.npy"
+    controller_exec_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/controller_styles_256.npz"
+    
+    
+    #自己新增： learning rate floor and warmup epochs for cosine scheduler
+    min_lr: float = 1e-6
+    warmup_epochs: int = 3
 
-    # def __post_init__(self):
-    #     # 默认让 cluster_file_path 与 controller_ref_traj_path 保持一致；
-    #     # 如需不同，可在 CLI 显式覆盖 cluster_file_path。
-    #     if self.cluster_file_path is None:
-    #         self.cluster_file_path = self.controller_ref_traj_path
+    # WorldCAP 主线：
+    # controller bank -> BEV latent world model -> reward scoring -> planning。
+    # controller 不直接改 imitation label / offset label / 最终候选轨迹。
+    use_controller_wm: bool = True
+    controller_wm_fusion: str = "attn_film" #如何用controller的信息去影响scene feature
+    controller_wm_token_scope: str = "all"  # "all" 或 "ego"：controller token 调制所有 world-model token，还是只调制 ego token。
+    controller_wm_first_step_only: bool = False  # 是否只在 world model 第一步注入 controller 信息。
+    controller_wm_attn_heads: int = 8  # controller 信息注入 world model 时 cross-attention 的 head 数。
+    controller_feature_mode: str = "full"  # "full" 或 "lateral_only"：ControllerEmbedding 从 ref/exec 轨迹中提取的特征范围。

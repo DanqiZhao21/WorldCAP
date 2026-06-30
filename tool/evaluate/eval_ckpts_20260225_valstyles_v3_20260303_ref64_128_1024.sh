@@ -27,6 +27,7 @@ set -euo pipefail
 #   bash tool/evaluate/eval_ckpts_20260225_valstyles.sh
 
 ROOT=${ROOT:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"}
+source "${ROOT}/tool/common/worldcap_newctrl_paths.sh"
 SCRIPT=${SCRIPT:-"${ROOT}/navsim/planning/script/run_pdm_score_multiTraj.py"}
 
 # Prefer current env python. Override with: export PYTHON=/abs/path/to/python
@@ -99,14 +100,14 @@ if ! is_nullish "${EVAL_CPU_THREADS}"; then
 fi
 
 # Controller bundle paths (matched to training bundle size)
-CTRL_REF_64=${CTRL_REF_64:-"${ROOT}/ControllerExp/Anchors_Original_64_centered.npy"}
-CTRL_EXEC_64=${CTRL_EXEC_64:-"${ROOT}/ControllerExp/generated/64/controller_styles_64.npz"}
+CTRL_REF_64=${CTRL_REF_64:-"${WORLDCAP_CTRL_REF_64}"}
+CTRL_EXEC_64=${CTRL_EXEC_64:-"${WORLDCAP_CTRL_EXEC_64}"}
 
-CTRL_REF_128=${CTRL_REF_128:-"${ROOT}/ControllerExp/Anchors_Original_128_centered.npy"}
-CTRL_EXEC_128=${CTRL_EXEC_128:-"${ROOT}/ControllerExp/generated/128/controller_styles_128.npz"}
+CTRL_REF_128=${CTRL_REF_128:-"${WORLDCAP_CTRL_REF_128}"}
+CTRL_EXEC_128=${CTRL_EXEC_128:-"${WORLDCAP_CTRL_EXEC_128}"}
 
-CTRL_REF_1024=${CTRL_REF_1024:-"${ROOT}/ControllerExp/Anchors_Original_1024_centered.npy"}
-CTRL_EXEC_1024=${CTRL_EXEC_1024:-"${ROOT}/ControllerExp/generated/1024/controller_styles_1024.npz"}
+CTRL_REF_1024=${CTRL_REF_1024:-"${WORLDCAP_CTRL_REF_1024}"}
+CTRL_EXEC_1024=${CTRL_EXEC_1024:-"${WORLDCAP_CTRL_EXEC_1024}"}
 
 # Active controller bundle vars used by run_eval (set per-run in main loop)
 CTRL_REF=${CTRL_REF:-""}

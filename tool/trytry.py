@@ -417,3 +417,20 @@ python /home/zhaodanqi/clone/WoTE/navsim/planning/script/run_pdm_score_multiTraj
   +anchor_save_dir=/home/zhaodanqi/clone/WoTE/ControllerInTheLoop/step0_validationOfSimulation/Post20251220/lab2_15headingAnd15speed \
   +anchor_save_name=default_yaw15_0_speed_extreme15_0.npy \
   +anchor_overwrite=False 
+  
+  
+  
+  
+  
+#0502
+WOTE_TRAIN_PROFILE=wm_reward_only \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
+NAVSIM_EXP_ROOT=/mnt/data/navsim_workspace/exp \
+CACHE_PATH=/mnt/data/navsim_workspace/exp/training_cache_allWoteTarget_0114 \
+CTRL_REF=/home/zhaodanqi/clone/WoTE/newCtrl/controller/ref_trajs/Anchors_Original_256_centered.npy \
+CTRL_EXEC=/home/zhaodanqi/clone/WoTE/newCtrl/controller/bundles/256/controller_styles_256.npz \
+RUN_FUSIONS=attn \
+EXP_BASE=WoTE/cap_controller_bundle_split_ctrl256 \
+EXP_TAG_BASE=ctrlbundle_trainSplit_ctrl256 \
+bash tool/training/0302train_wote_ctrlbundle_split_train_attn.sh
+

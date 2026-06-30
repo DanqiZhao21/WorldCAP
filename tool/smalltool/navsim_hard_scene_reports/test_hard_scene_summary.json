@@ -1,0 +1,23 @@
+{
+  "num_scenes": 69405,
+  "scene_filter": "navsim/planning/script/config/common/scene_filter/navtest.yaml",
+  "split": "test",
+  "subsets": {
+    "navtest_hard_composite_p90": 21021,
+    "navtest_hard_curved_p90": 6941,
+    "navtest_hard_curved_p95": 3471,
+    "navtest_hard_dynamic_p90": 13990,
+    "navtest_hard_fast_curve_p90": 6941,
+    "navtest_hard_interaction_p90": 5914
+  },
+  "thresholds": {
+    "abs_yaw_deg_p75": 3.086169059555037,
+    "abs_yaw_deg_p90": 21.374385669138697,
+    "abs_yaw_deg_p95": 47.38910368629634,
+    "latacc_proxy_p90": 0.3034182612224184,
+    "max_acc_mps2_p90": 1.8590316836561906,
+    "max_yaw_rate_deg_s_p90": 11.047623693552737,
+    "near_agents_30m_p90": 54.0,
+    "speed_delta_mps_p90": 4.22750290985811
+  }
+}

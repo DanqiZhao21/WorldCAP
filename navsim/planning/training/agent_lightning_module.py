@@ -30,12 +30,18 @@ class AgentLightningModule(pl.LightningModule):
             missing, unexpected = self.agent.load_state_dict(state_dict, strict=False)
             print("Missing keys:", missing)
             print("Unexpected keys:", unexpected)
+
+        if hasattr(self.agent, "load_post_checkpoint_modules"):
+            self.agent.load_post_checkpoint_modules()
     
     def setup(self, stage=None):
         print("Setting up: freezing & unfreezing layers...")
 
         # Training profile switch.
+        # - controller_wm_fusion_only: train only controller embedding and controller-to-WM fusion layers.
+        # - wote_no_controller: continue original WOTE training without controller embedding modules.
         # - wm_reward_only: train controller-conditioned world-model transition + reward/map heads (test-time controller adaptation)
+        # - herm_wm_reward_only: train world-model/reward/map heads with HERM-executed candidates, no controller token path
         # - controller_inject_only: ONLY train controller style token + injection layers (older CAP finetune)
         # - legacy: previous behavior (kept for backward compatibility)
         train_profile = os.getenv("WOTE_TRAIN_PROFILE", "controller_inject_only").strip().lower()
@@ -50,9 +56,77 @@ class AgentLightningModule(pl.LightningModule):
         # Determine controller injection mode (may not be used by newer profiles/models).
         inj_mode = str(getattr(self.agent.config, 'controller_injection_mode', 'film') or 'film').strip().lower()
         pooling = str(getattr(self.agent.config, 'controller_style_pooling', 'attn') or 'attn').strip().lower()
-        wm_fusion = str(getattr(self.agent.config, 'controller_world_model_fusion', 'attn') or 'attn').strip().lower()
+        wm_fusion = str(
+            getattr(
+                self.agent.config,
+                'controller_wm_fusion',
+                getattr(self.agent.config, 'controller_world_model_fusion', 'attn'),
+            )
+            or 'attn'
+        ).strip().lower()
 
-        if train_profile == "wm_reward_only":
+        if train_profile == "controller_wm_fusion_only":
+            # Clean controller-plugin finetune:
+            # keep all original WoTE backbone/world-model/reward/map/head parameters frozen.
+            trainable_modules = [
+                "controller_encoder",
+                "ctrl_proj",
+                "ctrl_token_ln",
+            ]
+            if pooling == 'attn':
+                trainable_modules.append("ctrl_style_attn")
+
+            if wm_fusion in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
+                trainable_modules += [
+                    "ctrl_bank_proj",
+                    "ctrl_bank_ln",
+                    "ctrl_fuse_attn",
+                ]
+            elif wm_fusion in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
+                trainable_modules += [
+                    "ctrl_bank_proj",
+                    "ctrl_bank_ln",
+                    "ctrl_fuse_attn",
+                    "ctrl_wm_film_scale",
+                    "ctrl_wm_film_shift",
+                    "ctrl_wm_film_ln",
+                ]
+            elif wm_fusion.startswith('film'):
+                trainable_modules += [
+                    "ctrl_wm_film_scale",
+                    "ctrl_wm_film_shift",
+                    "ctrl_wm_film_ln",
+                ]
+
+            head_modules = []
+        elif train_profile == "herm_wm_reward_only":
+            trainable_modules = [
+                "latent_world_model",
+                "reward_conv_net",
+                "reward_cat_head",
+                "reward_head",
+                "sim_reward_heads",
+                "_bev_upscale",
+                "bev_upsample_head",
+                "bev_semantic_head",
+            ]
+            head_modules = []
+        elif train_profile == "wote_no_controller":
+            trainable_modules = [
+                "offset_tf_decoder",
+                "offset_head",
+                "offset_score_head",
+                "latent_world_model",
+                "reward_conv_net",
+                "reward_cat_head",
+                "reward_head",
+                "sim_reward_heads",
+                "_bev_upscale",
+                "bev_upsample_head",
+                "bev_semantic_head",
+            ]
+            head_modules = []
+        elif train_profile == "wm_reward_only":
             # New recommended profile for controller-aware latent transition:
             # - Train controller style token extractor
             # - Train latent world model (transition)
@@ -86,6 +160,15 @@ class AgentLightningModule(pl.LightningModule):
                     "ctrl_bank_ln",
                     "ctrl_fuse_attn",
                 ]
+            elif wm_fusion in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
+                trainable_modules += [
+                    "ctrl_bank_proj",
+                    "ctrl_bank_ln",
+                    "ctrl_fuse_attn",
+                    "ctrl_wm_film_scale",
+                    "ctrl_wm_film_shift",
+                    "ctrl_wm_film_ln",
+                ]
             elif wm_fusion.startswith('film'):
                 trainable_modules += [
                     "ctrl_wm_film_scale",
@@ -105,17 +188,27 @@ class AgentLightningModule(pl.LightningModule):
             if pooling == 'attn':
                 trainable_modules.append("ctrl_style_attn")
 
-            # Injection layers with parameters.
-            # In the current model, FiLM is used for trajectory feature branch conditioning.
-            if inj_mode == 'film':
+            if wm_fusion in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
                 trainable_modules += [
-                    "ctrl_traj_film_scale",
-                    "ctrl_traj_film_shift",
-                    "ctrl_traj_film_ln",
+                    "ctrl_bank_proj",
+                    "ctrl_bank_ln",
+                    "ctrl_fuse_attn",
                 ]
-            else:
-                # 'add'/'none': no extra trainable injection params beyond ctrl_proj/ln.
-                pass
+            elif wm_fusion in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
+                trainable_modules += [
+                    "ctrl_bank_proj",
+                    "ctrl_bank_ln",
+                    "ctrl_fuse_attn",
+                    "ctrl_wm_film_scale",
+                    "ctrl_wm_film_shift",
+                    "ctrl_wm_film_ln",
+                ]
+            elif wm_fusion.startswith('film'):
+                trainable_modules += [
+                    "ctrl_wm_film_scale",
+                    "ctrl_wm_film_shift",
+                    "ctrl_wm_film_ln",
+                ]
 
             # No generic head unfreezing in this profile.
             head_modules = []

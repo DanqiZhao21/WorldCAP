@@ -46,12 +46,15 @@ wotenewnew/
 # 数据 & 输出文件夹
 # -------------------------
 EvaluationResult/
-trainingResult/
+trainingResult
+WorldCAP_pic
+wandb/
 extra_data/
 assets/
 nuplan-devkit/
 ControllerInTheLoop/
-
+ControllerExp/
+CtrlNew/
 # -------------------------
 # 模型文件
 # -------------------------

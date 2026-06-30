@@ -141,9 +141,6 @@ class WoTETargetBuilder(AbstractTargetBuilder):
                                             ref_frame_offset)
         fut_anno_in_cur_frame = deepcopy(fut_annotations)
         fut_anno_in_cur_frame.boxes = fut_annotations_in_cur_frame_boxes#目标框的坐标值都是转换到了当前帧的坐标系下面
-        
-#FIXME:
-
         # =====================================================
         # 5. 未来 agent target（对齐到当前 ego）
         # =====================================================
@@ -156,18 +153,18 @@ class WoTETargetBuilder(AbstractTargetBuilder):
         result["fut_agent_labels"] = fut_agent_labels
 
         # =====================================================
-        # 6. TODO:自己新增的一个：未来 BEV（无 ego、无 anchor）⭐关键==》 result["fut_bev_semantic_map"]还需要进一步完善
+        # 6. Future BEV base map, without ego/candidate boxes.
+        #    WoTE_model.py composes the supervised fut_bev_semantic_map at
+        #    runtime from this base map and the active raw-anchor candidates.
         # =====================================================
         # for map targets 这一步的ego_pose是当前帧的 应该是为了方便将整个图绘制在当前帧的ego-car坐标系下面
         ego_pose = StateSE2(*scene.frames[cur_map_index].ego_status.ego_pose)
         fut_bev_semantic_map = self._compute_bev_semantic_map(fut_anno_in_cur_frame, scene.map_api, ego_pose)
-        # 存储与控制器无关的基础未来 BEV 语义图（不包含 ego 注入）
         result["fut_bev_semantic_map_base"] = fut_bev_semantic_map
-        # 记录用于对齐的未来帧间隔，训练时再结合具体控制器执行轨迹进行注入
         result["frame_interval"] = frame_interval
         
+        # Optional local visualization hook.
         # token = scene.frames[index].token
-        #FIXME:
         # save_dir = "/home/zhaodanqi/clone/WoTE/trainingResult/bev-pic-target"
         # os.makedirs(save_dir, exist_ok=True)
         # # sem = fut_bev_semantic_map.argmax(dim=0).numpy()  # 转成 [H, W]
@@ -183,15 +180,13 @@ class WoTETargetBuilder(AbstractTargetBuilder):
    
         fut_bev_semantic_map_list = []
         random_sample_idx = self.rng.choice(self.trajectory_anchors_all.shape[0], self.num_sampled_trajs, replace=False)#总共有256个anchor，送里面随机选几个anchor出来
-        sampled_trajectory_anchors = self.trajectory_anchors_all[random_sample_idx]
 
         result["sampled_trajs_index"] = random_sample_idx
         
-        # 不在缓存阶段注入控制器执行轨迹，以便缓存对各种控制器风格复用。
-        # 训练/评估阶段再根据提供的 controller_exec_traj_path 进行注入，避免重复构建缓存。
+        # Do not inject ego/candidate boxes in the cache. Keeping only the base
+        # map lets the model rebuild the original WoTE target space at runtime.
         return result
         
-#FIXME:
     def transform_boxes_from_future_to_current_ego_frame(self, boxes_future: np.ndarray, points_rel: np.ndarray) -> np.ndarray:
         """
         将未来ego车坐标系下的盒子转换到当前ego车坐标系下。

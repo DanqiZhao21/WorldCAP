@@ -25,6 +25,7 @@ import math
 from torch.optim.lr_scheduler import _LRScheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 import torch.optim as optim
+import inspect
 
 def build_from_configs(obj, cfg: DictConfig, **kwargs):
     if cfg is None:
@@ -80,6 +81,11 @@ class WoTEAgent(AbstractAgent):
             del state_dict["agent.WoTE_model.trajectory_anchors"]
 
         self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()}, strict=False)
+        self.load_post_checkpoint_modules()
+
+    def load_post_checkpoint_modules(self) -> None:
+        if hasattr(self.WoTE_model, "load_post_checkpoint_modules"):
+            self.WoTE_model.load_post_checkpoint_modules()
 
     def get_sensor_config(self) -> SensorConfig:
         """Inherited, see superclass."""
@@ -182,7 +188,11 @@ class WarmupCosLR(_LRScheduler):#继承自所有调度器基类
         self.lr = lr
         self.epochs = epochs
         self.warmup_epochs = warmup_epochs
-        super(WarmupCosLR, self).__init__(optimizer, last_epoch, verbose)
+        scheduler_init = inspect.signature(super(WarmupCosLR, self).__init__)
+        if "verbose" in scheduler_init.parameters:
+            super(WarmupCosLR, self).__init__(optimizer, last_epoch=last_epoch, verbose=verbose)
+        else:
+            super(WarmupCosLR, self).__init__(optimizer, last_epoch=last_epoch)
 
     def state_dict(self):
         """Returns the state of the scheduler as a :class:`dict`.

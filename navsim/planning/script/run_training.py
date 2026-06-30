@@ -202,9 +202,13 @@ def main(cfg: DictConfig) -> None:
     agent: AbstractAgent = instantiate(cfg.agent)
 
     logger.info("Building Lightning Module")
+    init_ckpt_path = os.getenv(
+        "WOTE_INIT_CKPT",
+        "/home/zhaodanqi/clone/WoTE/trainingResult/epoch=29-step=19950.ckpt",
+    )
     lightning_module = AgentLightningModule(
         agent=agent,
-        ckpt_path="/home/zhaodanqi/clone/WoTE/trainingResult/epoch=29-step=19950.ckpt"
+        ckpt_path=init_ckpt_path,
     )
 
     if cfg.use_cache_without_dataset:
@@ -239,8 +243,10 @@ def main(cfg: DictConfig) -> None:
     trainer_params['strategy'] = "ddp_find_unused_parameters_true"
     
     logger_wandb = WandbLogger(
-        project="WOTE-training-2",  # 项目名
-        name="ControllerInTheLoop",
+        project=os.getenv("WOTE_WANDB_PROJECT", "WOTE-training-2"),  # 项目名
+        name=os.getenv("WOTE_WANDB_RUN_NAME", "ControllerInTheLoop"),
+        group=os.getenv("WOTE_WANDB_GROUP", None),
+        tags=[tag for tag in os.getenv("WOTE_WANDB_TAGS", "").split(",") if tag],
         save_dir="/home/zhaodanqi/clone/WoTE/trainingResult",    # 训练结果存储路径
     )
 

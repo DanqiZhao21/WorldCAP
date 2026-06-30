@@ -15,8 +15,8 @@ set -euo pipefail
 #   NAVSIM_EXP_ROOT=/path/to/exp_root \
 #   bash tool/training/0224train_wote_ctrlbundle_split_train_attn.sh
 
-# Recommended for this setting (freeze policy; train WM + reward heads only)
-export WOTE_TRAIN_PROFILE=${WOTE_TRAIN_PROFILE:-wm_reward_only}
+# Recommended for this setting: freeze original WoTE and train only controller embedding/fusion.
+export WOTE_TRAIN_PROFILE=${WOTE_TRAIN_PROFILE:-controller_wm_fusion_only}
 
 ROOT=${ROOT:-/home/zhaodanqi/clone/WoTE}
 
@@ -169,6 +169,8 @@ if pooling == 'attn':
 
 if fusion_s in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
   need += ['ctrl_fuse_attn', 'ctrl_bank_proj', 'ctrl_bank_ln']
+elif fusion_s in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
+  need += ['ctrl_fuse_attn', 'ctrl_bank_proj', 'ctrl_bank_ln', 'ctrl_wm_film_scale', 'ctrl_wm_film_shift', 'ctrl_wm_film_ln']
 elif fusion_s.startswith('film'):
   need += ['ctrl_wm_film_scale', 'ctrl_wm_film_shift', 'ctrl_wm_film_ln']
 

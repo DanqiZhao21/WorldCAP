@@ -5,9 +5,10 @@ set -euo pipefail
 # NOTE: Planner anchors (PLANNER_ANCHORS) stay unchanged; only CTRL_REF/CTRL_EXEC differ.
 
 ROOT=${ROOT:-/home/zhaodanqi/clone/WoTE}
+source "${ROOT}/tool/common/worldcap_newctrl_paths.sh"
 
-export CTRL_REF=${CTRL_REF:-"${ROOT}/ControllerExp/Anchors_Original_128_centered.npy"}
-export CTRL_EXEC=${CTRL_EXEC:-"${ROOT}/ControllerExp/generated/128/controller_styles_128.npz"}
+export CTRL_REF=${CTRL_REF:-"${WORLDCAP_CTRL_REF_128}"}
+export CTRL_EXEC=${CTRL_EXEC:-"${WORLDCAP_CTRL_EXEC_128}"}
 
 # Only train the attn fusion for this experiment (override by env if needed)
 export RUN_FUSIONS=${RUN_FUSIONS:-"attn"}

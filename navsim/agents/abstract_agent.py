@@ -1,5 +1,6 @@
 from abc import abstractmethod, ABC
 from typing import Dict, Union, List
+import os
 import torch
 import pytorch_lightning as pl
 
@@ -70,31 +71,39 @@ class AbstractAgent(torch.nn.Module, ABC):
             features.update(builder.compute_features(agent_input))
 
         # add batch dimension
-        features = {k: v.unsqueeze(0) for k, v in features.items()}
+        try:
+            device = next(self.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+        features = {k: v.unsqueeze(0).to(device) for k, v in features.items()}
 
         # forward pass
         with torch.no_grad():
             predictions = self.forward(features)#这里是调用WoTE_model的forward_test3 #将forward 改为里面轨迹使用offsets变成完全不需要offset试一下
-            poses = predictions["trajectory"].squeeze(0).numpy()
+            poses = predictions["trajectory"].squeeze(0).detach().cpu().numpy()
             #FIXME:
-            all_poses = predictions["all_trajectory"].squeeze(0).numpy()  # shape: (num_modes, T, 3)
-            scores = predictions["final_rewards"].squeeze(0).numpy()
+            all_poses = predictions["all_trajectory"].squeeze(0).detach().cpu().numpy()  # shape: (num_modes, T, 3)
+            scores = predictions["final_rewards"].squeeze(0).detach().cpu().numpy()
             
 #FIXME:
 
-        # extract trajectory
-        # return Trajectory(poses)
-    
-        return {
-            #最高分轨迹
-            "trajector":Trajectory(poses),#pose是（1,8,3）
-            #多条轨迹
-            "trajectories": [Trajectory(traj) for traj in all_poses],
-            "trajectory_scores": scores,
-            #原始anchor(也是没有batch的 （256,8 3）)
-            # "trajectoryAnchor": predictions["trajectoryAnchor"]
-            "trajectoryAnchor": [ Trajectory(traj) for traj in predictions["trajectoryAnchor"]]
-        } 
+        if os.getenv("NAVSIM_RETURN_MULTITRAJ_DICT", "0") == "1":
+            return {
+                # 最高分轨迹
+                "trajector": Trajectory(poses, self._trajectory_sampling),
+                # 多条轨迹
+                "trajectories": [
+                    Trajectory(traj, self._trajectory_sampling) for traj in all_poses
+                ],
+                "trajectory_scores": scores,
+                # 原始 anchor（没有 batch 维度，shape: [256, 8, 3]）
+                "trajectoryAnchor": [
+                    Trajectory(traj, self._trajectory_sampling)
+                    for traj in predictions["trajectoryAnchor"]
+                ],
+            }
+
+        return Trajectory(poses, self._trajectory_sampling)
 
     
     def compute_trajectory_gpu(self, agent_input: AgentInput) -> Trajectory:

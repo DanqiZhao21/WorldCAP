@@ -15,6 +15,9 @@ import lzma
 import pickle
 import os
 import uuid
+import csv
+
+import torch
 
 from nuplan.planning.script.builders.logging_builder import build_logger
 from nuplan.planning.utils.multithreading.worker_utils import worker_map
@@ -116,8 +119,11 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
     }
     scorer: PDMScorer = instantiate(scorer_cfg)
     assert simulator.proposal_sampling == scorer.proposal_sampling, "Simulator and scorer proposal sampling has to be identical"
-    agent: AbstractAgent = instantiate(cfg.agent)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device} in thread_id={thread_id}, node_id={node_id}")
+    agent: AbstractAgent = instantiate(cfg.agent).to(device)
     agent.initialize()
+    agent.to(device)
     agent.is_eval = True
 
     metric_cache_loader = MetricCacheLoader(Path(cfg.metric_cache_path))
@@ -133,6 +139,10 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
 
     tokens_to_evaluate = list(set(scene_loader.tokens) & set(metric_cache_loader.tokens))
     pdm_results: List[Dict[str, Any]] = []
+    stream_csv_path = None
+    if getattr(cfg, "stream_worker_csv", False):
+        stream_csv_path = Path(cfg.output_dir) / f"partial_{node_id}_{thread_id}.csv"
+        stream_csv_path.parent.mkdir(parents=True, exist_ok=True)
     for idx, (token) in enumerate(tokens_to_evaluate):
         logger.info(
             f"Processing scenario {idx + 1} / {len(tokens_to_evaluate)} in thread_id={thread_id}, node_id={node_id}"
@@ -192,7 +202,10 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
                 evaluate_all_trajectories=evaluate_all_trajectories,
             )
             # print(f"💚💚💚 Best PDM idx for token {token} is {best_pdm_idx},   Model_best idx for  is {pred_idx}")
-            scene = scene_loader.get_scene_from_token(token)
+            # Loading a full Scene builds the nuPlan map API. Keep that optional because
+            # batch scoring only needs the metric cache and agent input; visualization is
+            # disabled by default in this script.
+            scene = scene_loader.get_scene_from_token(token) if getattr(cfg, "enable_eval_visualization", False) else None
             logger.warning(f"----------- ☀️☀️☀️Agent for token {token}:")
 #PRINT           
             # human_traj = scene.get_future_trajectory()
@@ -221,6 +234,13 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[D
             score_row["valid"] = False
 
         pdm_results.append(score_row)
+        if stream_csv_path is not None:
+            write_header = not stream_csv_path.exists()
+            with stream_csv_path.open("a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(score_row.keys()))
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(score_row)
         
         
 
