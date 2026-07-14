@@ -25,15 +25,16 @@ from navsim.planning.training.agent_lightning_module import AgentLightningModule
 class FakeAgent:
     def __init__(self):
         self.config = SimpleNamespace(
-            controller_injection_mode="film",
-            controller_style_pooling="attn",
-            controller_world_model_fusion="attn",
+            freeze_all=True,
+            trainable_groups=[],
+            trainable_prefixes=[],
+            frozen_prefixes=[],
+            freeze_strict=True,
         )
         names = [
             "WoTE_model.controller_encoder.feat_proj.0.weight",
             "WoTE_model.ctrl_proj.weight",
             "WoTE_model.ctrl_token_ln.weight",
-            "WoTE_model.ctrl_style_attn.weight",
             "WoTE_model.ctrl_bank_proj.weight",
             "WoTE_model.ctrl_bank_ln.weight",
             "WoTE_model.ctrl_fuse_attn.in_proj_weight",
@@ -49,6 +50,8 @@ class FakeAgent:
             "WoTE_model.bev_upsample_head.up_conv5.weight",
             "WoTE_model.bev_semantic_head.0.weight",
             "WoTE_model._backbone.weight",
+            "WoTE_model.scene_position_embedding.weight",
+            "WoTE_model.encode_ego_feat_mlp.weight",
             "WoTE_model.offset_tf_decoder.layers.0.self_attn.in_proj_weight",
             "WoTE_model.offset_head.weight",
             "WoTE_model.offset_score_head.0.weight",
@@ -65,9 +68,13 @@ def _module_with_fake_agent():
     return module
 
 
-def test_controller_wm_fusion_only_freezes_original_wote_modules(monkeypatch):
-    monkeypatch.setenv("WOTE_TRAIN_PROFILE", "controller_wm_fusion_only")
+def test_trainable_groups_unfreeze_controller_latent_and_reward_heads():
     module = _module_with_fake_agent()
+    module.agent.config.trainable_groups = [
+        "controller_embedding",
+        "latent_world_model",
+        "reward_heads",
+    ]
 
     module.setup()
 
@@ -76,69 +83,57 @@ def test_controller_wm_fusion_only_freezes_original_wote_modules(monkeypatch):
         "WoTE_model.controller_encoder.feat_proj.0.weight",
         "WoTE_model.ctrl_proj.weight",
         "WoTE_model.ctrl_token_ln.weight",
-        "WoTE_model.ctrl_style_attn.weight",
-        "WoTE_model.ctrl_bank_proj.weight",
-        "WoTE_model.ctrl_bank_ln.weight",
-        "WoTE_model.ctrl_fuse_attn.in_proj_weight",
-    }
-
-
-def test_controller_wm_fusion_only_trains_attn_film_modules(monkeypatch):
-    monkeypatch.setenv("WOTE_TRAIN_PROFILE", "controller_wm_fusion_only")
-    module = _module_with_fake_agent()
-    module.agent.config.controller_world_model_fusion = "attn_film"
-
-    module.setup()
-
-    trainable = {name for name, param in module.agent.named_parameters() if param.requires_grad}
-    assert trainable == {
-        "WoTE_model.controller_encoder.feat_proj.0.weight",
-        "WoTE_model.ctrl_proj.weight",
-        "WoTE_model.ctrl_token_ln.weight",
-        "WoTE_model.ctrl_style_attn.weight",
         "WoTE_model.ctrl_bank_proj.weight",
         "WoTE_model.ctrl_bank_ln.weight",
         "WoTE_model.ctrl_fuse_attn.in_proj_weight",
         "WoTE_model.ctrl_wm_film_scale.weight",
         "WoTE_model.ctrl_wm_film_shift.weight",
         "WoTE_model.ctrl_wm_film_ln.weight",
-    }
-
-
-def test_controller_wm_fusion_only_trains_attn_film_modules_with_current_config_name(monkeypatch):
-    monkeypatch.setenv("WOTE_TRAIN_PROFILE", "controller_wm_fusion_only")
-    module = _module_with_fake_agent()
-    delattr(module.agent.config, "controller_world_model_fusion")
-    module.agent.config.controller_wm_fusion = "attn_film"
-
-    module.setup()
-
-    trainable = {name for name, param in module.agent.named_parameters() if param.requires_grad}
-    assert {
-        "WoTE_model.ctrl_wm_film_scale.weight",
-        "WoTE_model.ctrl_wm_film_shift.weight",
-        "WoTE_model.ctrl_wm_film_ln.weight",
-    }.issubset(trainable)
-
-
-def test_wote_no_controller_trains_original_wote_modules_without_controller_embedding(monkeypatch):
-    monkeypatch.setenv("WOTE_TRAIN_PROFILE", "wote_no_controller")
-    module = _module_with_fake_agent()
-
-    module.setup()
-
-    trainable = {name for name, param in module.agent.named_parameters() if param.requires_grad}
-    assert trainable == {
         "WoTE_model.latent_world_model.weight",
         "WoTE_model.reward_conv_net.conv1.weight",
         "WoTE_model.reward_cat_head.0.weight",
         "WoTE_model.reward_head.0.weight",
         "WoTE_model.sim_reward_heads.0.0.weight",
-        "WoTE_model._bev_upscale.weight",
-        "WoTE_model.bev_upsample_head.up_conv5.weight",
-        "WoTE_model.bev_semantic_head.0.weight",
-        "WoTE_model.offset_tf_decoder.layers.0.self_attn.in_proj_weight",
-        "WoTE_model.offset_head.weight",
-        "WoTE_model.offset_score_head.0.weight",
     }
-    assert not any("controller" in name or ".ctrl_" in name for name in trainable)
+
+
+def test_trainable_and_frozen_prefixes_override_groups():
+    module = _module_with_fake_agent()
+    module.agent.config.trainable_groups = ["controller_embedding", "reward_heads"]
+    module.agent.config.trainable_prefixes = ["WoTE_model.bev_semantic_head"]
+    module.agent.config.frozen_prefixes = [
+        "WoTE_model.ctrl_fuse_attn",
+        "WoTE_model.reward_head",
+    ]
+
+    module.setup()
+
+    trainable = {name for name, param in module.agent.named_parameters() if param.requires_grad}
+    assert "WoTE_model.bev_semantic_head.0.weight" in trainable
+    assert "WoTE_model.ctrl_fuse_attn.in_proj_weight" not in trainable
+    assert "WoTE_model.reward_head.0.weight" not in trainable
+    assert "WoTE_model.reward_cat_head.0.weight" in trainable
+
+
+def test_freeze_strict_rejects_unknown_group():
+    module = _module_with_fake_agent()
+    module.agent.config.trainable_groups = ["not_a_group"]
+
+    try:
+        module.setup()
+    except ValueError as exc:
+        assert "Unknown trainable group" in str(exc)
+    else:
+        raise AssertionError("Expected setup to reject an unknown trainable group")
+
+
+def test_freeze_strict_rejects_unmatched_prefix():
+    module = _module_with_fake_agent()
+    module.agent.config.trainable_prefixes = ["WoTE_model.missing_module"]
+
+    try:
+        module.setup()
+    except ValueError as exc:
+        assert "matched no parameters" in str(exc)
+    else:
+        raise AssertionError("Expected setup to reject an unmatched prefix")

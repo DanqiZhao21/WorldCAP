@@ -47,8 +47,8 @@ def compute_wote_loss(
     sim_rewards = predictions["sim_rewards"]
     sim_reward_loss = compute_sim_reward_loss(targets, sim_rewards)
 
-    im_w = float(getattr(config, 'im_loss_weight', 1.0) or 1.0)
-    metric_w = float(getattr(config, 'metric_loss_weight', 1.0) or 1.0)
+    im_w = float(getattr(config, 'im_loss_weight', 1.0))
+    metric_w = float(getattr(config, 'metric_loss_weight', 1.0))
 
     loss_dict['im_reward_loss'] = im_reward_loss * im_w
     loss_dict['sim_reward_loss'] = sim_reward_loss * metric_w

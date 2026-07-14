@@ -5,6 +5,48 @@ import torch
 import os
 from navsim.agents.abstract_agent import AbstractAgent
 
+TRAINABLE_GROUP_PREFIXES = {
+    "controller_embedding": [
+        "WoTE_model.controller_encoder",
+        "WoTE_model.ctrl_proj",
+        "WoTE_model.ctrl_token_ln",
+        "WoTE_model.ctrl_bank_proj",
+        "WoTE_model.ctrl_bank_ln",
+        "WoTE_model.ctrl_fuse_attn",
+        "WoTE_model.ctrl_wm_film_scale",
+        "WoTE_model.ctrl_wm_film_shift",
+        "WoTE_model.ctrl_wm_film_ln",
+    ],
+    "latent_world_model": [
+        "WoTE_model.latent_world_model",
+    ],
+    "reward_heads": [
+        "WoTE_model.reward_conv_net",
+        "WoTE_model.reward_cat_head",
+        "WoTE_model.reward_head",
+        "WoTE_model.sim_reward_heads",
+    ],
+    "map_heads": [
+        "WoTE_model._bev_upscale",
+        "WoTE_model.bev_upsample_head",
+        "WoTE_model.bev_semantic_head",
+    ],
+    "offset_heads": [
+        "WoTE_model.offset_tf_decoder",
+        "WoTE_model.offset_head",
+        "WoTE_model.offset_score_head",
+    ],
+}
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return list(value)
+
+
 class AgentLightningModule(pl.LightningModule):
     # def __init__(
     #     self,
@@ -37,267 +79,75 @@ class AgentLightningModule(pl.LightningModule):
     def setup(self, stage=None):
         print("Setting up: freezing & unfreezing layers...")
 
-        # Training profile switch.
-        # - controller_wm_fusion_only: train only controller embedding and controller-to-WM fusion layers.
-        # - wote_no_controller: continue original WOTE training without controller embedding modules.
-        # - wm_reward_only: train controller-conditioned world-model transition + reward/map heads (test-time controller adaptation)
-        # - herm_wm_reward_only: train world-model/reward/map heads with HERM-executed candidates, no controller token path
-        # - controller_inject_only: ONLY train controller style token + injection layers (older CAP finetune)
-        # - legacy: previous behavior (kept for backward compatibility)
-        train_profile = os.getenv("WOTE_TRAIN_PROFILE", "controller_inject_only").strip().lower()
+        freeze_all = bool(getattr(self.agent.config, "freeze_all", True))
+        trainable_groups = _as_list(getattr(self.agent.config, "trainable_groups", []))
+        trainable_prefixes = _as_list(getattr(self.agent.config, "trainable_prefixes", []))
+        frozen_prefixes = _as_list(
+            getattr(
+                self.agent.config,
+                "frozen_prefixes",
+                [
+                    "WoTE_model._backbone",
+                    "WoTE_model.scene_position_embedding",
+                    "WoTE_model.encode_ego_feat_mlp",
+                ],
+            )
+        )
+        strict = bool(getattr(self.agent.config, "freeze_strict", True))
 
-        # Always keep these frozen.
-        always_frozen_modules = [
+        unknown_groups = [group for group in trainable_groups if group not in TRAINABLE_GROUP_PREFIXES]
+        if unknown_groups and strict:
+            known = ", ".join(sorted(TRAINABLE_GROUP_PREFIXES))
+            raise ValueError(f"Unknown trainable group(s): {unknown_groups}. Known groups: {known}")
+
+        for group in trainable_groups:
+            trainable_prefixes.extend(TRAINABLE_GROUP_PREFIXES.get(group, []))
+
+        # These core perception/position modules are frozen by default unless the
+        # YAML explicitly replaces frozen_prefixes with an empty list.
+        default_frozen_prefixes = [
             "_backbone",
             "scene_position_embedding",
             "encode_ego_feat_mlp",
         ]
+        for prefix in default_frozen_prefixes:
+            qualified = f"WoTE_model.{prefix}"
+            if not any(item == qualified or item == prefix for item in frozen_prefixes):
+                frozen_prefixes.append(qualified)
 
-        # Determine controller injection mode (may not be used by newer profiles/models).
-        inj_mode = str(getattr(self.agent.config, 'controller_injection_mode', 'film') or 'film').strip().lower()
-        pooling = str(getattr(self.agent.config, 'controller_style_pooling', 'attn') or 'attn').strip().lower()
-        wm_fusion = str(
-            getattr(
-                self.agent.config,
-                'controller_wm_fusion',
-                getattr(self.agent.config, 'controller_world_model_fusion', 'attn'),
-            )
-            or 'attn'
-        ).strip().lower()
-
-        if train_profile == "controller_wm_fusion_only":
-            # Clean controller-plugin finetune:
-            # keep all original WoTE backbone/world-model/reward/map/head parameters frozen.
-            trainable_modules = [
-                "controller_encoder",
-                "ctrl_proj",
-                "ctrl_token_ln",
-            ]
-            if pooling == 'attn':
-                trainable_modules.append("ctrl_style_attn")
-
-            if wm_fusion in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
-                trainable_modules += [
-                    "ctrl_bank_proj",
-                    "ctrl_bank_ln",
-                    "ctrl_fuse_attn",
-                ]
-            elif wm_fusion in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
-                trainable_modules += [
-                    "ctrl_bank_proj",
-                    "ctrl_bank_ln",
-                    "ctrl_fuse_attn",
-                    "ctrl_wm_film_scale",
-                    "ctrl_wm_film_shift",
-                    "ctrl_wm_film_ln",
-                ]
-            elif wm_fusion.startswith('film'):
-                trainable_modules += [
-                    "ctrl_wm_film_scale",
-                    "ctrl_wm_film_shift",
-                    "ctrl_wm_film_ln",
-                ]
-
-            head_modules = []
-        elif train_profile == "herm_wm_reward_only":
-            trainable_modules = [
-                "latent_world_model",
-                "reward_conv_net",
-                "reward_cat_head",
-                "reward_head",
-                "sim_reward_heads",
-                "_bev_upscale",
-                "bev_upsample_head",
-                "bev_semantic_head",
-            ]
-            head_modules = []
-        elif train_profile == "wote_no_controller":
-            trainable_modules = [
-                "offset_tf_decoder",
-                "offset_head",
-                "offset_score_head",
-                "latent_world_model",
-                "reward_conv_net",
-                "reward_cat_head",
-                "reward_head",
-                "sim_reward_heads",
-                "_bev_upscale",
-                "bev_upsample_head",
-                "bev_semantic_head",
-            ]
-            head_modules = []
-        elif train_profile == "wm_reward_only":
-            # New recommended profile for controller-aware latent transition:
-            # - Train controller style token extractor
-            # - Train latent world model (transition)
-            # - Train reward heads
-            # - Train map heads (for fut_bev_semantic_map supervision)
-            trainable_modules = [
-                # controller style token path
-                "controller_encoder",
-                "ctrl_proj",
-                "ctrl_token_ln",
-                # transition model
-                "latent_world_model",
-                # reward/scoring
-                "reward_conv_net",
-                "reward_cat_head",
-                "reward_head",
-                "sim_reward_heads",
-                # map heads
-                "_bev_upscale",
-                "bev_upsample_head",
-                "bev_semantic_head",
-            ]
-            if pooling == 'attn':
-                trainable_modules.append("ctrl_style_attn")
-
-            # World-model fusion layers (controller -> latent transition).
-            # These must be trainable, otherwise controller conditioning is effectively random/frozen.
-            if wm_fusion in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
-                trainable_modules += [
-                    "ctrl_bank_proj",
-                    "ctrl_bank_ln",
-                    "ctrl_fuse_attn",
-                ]
-            elif wm_fusion in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
-                trainable_modules += [
-                    "ctrl_bank_proj",
-                    "ctrl_bank_ln",
-                    "ctrl_fuse_attn",
-                    "ctrl_wm_film_scale",
-                    "ctrl_wm_film_shift",
-                    "ctrl_wm_film_ln",
-                ]
-            elif wm_fusion.startswith('film'):
-                trainable_modules += [
-                    "ctrl_wm_film_scale",
-                    "ctrl_wm_film_shift",
-                    "ctrl_wm_film_ln",
-                ]
-
-            head_modules = []
-        elif train_profile == "controller_inject_only":
-            # Train controller embedding + pooling/projection + the actual injection layers that have parameters.
-            # This matches the latest WoTE_model.py naming.
-            trainable_modules = [
-                "controller_encoder",
-                "ctrl_proj",
-                "ctrl_token_ln",
-            ]
-            if pooling == 'attn':
-                trainable_modules.append("ctrl_style_attn")
-
-            if wm_fusion in {'attn', 'attention', 'cross_attn', 'cross_attention'}:
-                trainable_modules += [
-                    "ctrl_bank_proj",
-                    "ctrl_bank_ln",
-                    "ctrl_fuse_attn",
-                ]
-            elif wm_fusion in {'attn_film', 'attention_film', 'cross_attn_film', 'cross_attention_film'}:
-                trainable_modules += [
-                    "ctrl_bank_proj",
-                    "ctrl_bank_ln",
-                    "ctrl_fuse_attn",
-                    "ctrl_wm_film_scale",
-                    "ctrl_wm_film_shift",
-                    "ctrl_wm_film_ln",
-                ]
-            elif wm_fusion.startswith('film'):
-                trainable_modules += [
-                    "ctrl_wm_film_scale",
-                    "ctrl_wm_film_shift",
-                    "ctrl_wm_film_ln",
-                ]
-
-            # No generic head unfreezing in this profile.
-            head_modules = []
-        elif train_profile in ("controller_inject_offset_reward", "controller_cap_abc"):
-            # Recommended minimal finetune for controller-aware planning (CAP):
-            # - Controller style token path (must train)
-            # - Injection A trainables (FiLM params when film)
-            # - Offset branch (B)
-            # - Reward/scoring branch (C)
-            # Still keeps perception backbone and positional embeddings frozen.
-            trainable_modules = [
-                # style token path
-                "controller_encoder",
-                "ctrl_proj",
-                "ctrl_token_ln",
-                # offset branch (B)
-                "offset_tf_decoder",
-                "offset_head",
-                "offset_score_head",
-                # reward/scoring branch (C)
-                "reward_conv_net",
-                "reward_cat_head",
-                "reward_head",
-                "sim_reward_heads",
-            ]
-            if pooling == 'attn':
-                trainable_modules.append("ctrl_style_attn")
-
-            if inj_mode == 'film':
-                trainable_modules += [
-                    "ctrl_traj_film_scale",
-                    "ctrl_traj_film_shift",
-                    "ctrl_traj_film_ln",
-                ]
-
-            head_modules = []
-        else:
-            # Legacy behavior (previous default): train a larger set of modules.
-            trainable_modules_base = [
-                "controller_encoder",
-                "ctrl_proj",
-                "feat_proj",
-                "temporal_conv",
-                "transformer",
-                "final_proj",
-                "latent_world_model",
-                "reward_conv_net",
-                "reward_cat_head",
-                "reward_head",
-            ]
-
-            if inj_mode == 'film':
-                # NOTE: updated to match latest WoTE_model naming
-                injection_trainables = [
-                    "ctrl_traj_film_scale",
-                    "ctrl_traj_film_shift",
-                    "ctrl_traj_film_ln",
-                ]
-            elif inj_mode == 'attn':
-                injection_trainables = ["ctrl_attn"]
-            elif inj_mode == 'concat':
-                injection_trainables = ["ctrl_concat_proj"]
-            else:
-                injection_trainables = []
-
-            trainable_modules = trainable_modules_base + injection_trainables
-            head_modules = ["head"]
-
+        trainable_matches = {prefix: 0 for prefix in trainable_prefixes}
+        frozen_matches = {prefix: 0 for prefix in frozen_prefixes}
         for name, param in self.agent.named_parameters():
-            # 默认先冻结
-            param.requires_grad = False
+            param.requires_grad = not freeze_all
 
-            # 解冻训练模块
-            if any(key in name for key in trainable_modules):
+            matched_trainable = [prefix for prefix in trainable_prefixes if name.startswith(prefix)]
+            if matched_trainable:
                 param.requires_grad = True
+                for prefix in matched_trainable:
+                    trainable_matches[prefix] += 1
 
-            # 强制冻结模块
-            if any(key in name for key in always_frozen_modules):
+            matched_frozen = [prefix for prefix in frozen_prefixes if name.startswith(prefix)]
+            if matched_frozen:
                 param.requires_grad = False
+                for prefix in matched_frozen:
+                    frozen_matches[prefix] += 1
 
-            # 解冻 head 模块
-            if any(key in name for key in head_modules):
-                param.requires_grad = True
+        if strict:
+            missing_trainable = [prefix for prefix, count in trainable_matches.items() if count == 0]
+            missing_frozen = [prefix for prefix, count in frozen_matches.items() if count == 0]
+            if missing_trainable:
+                raise ValueError(f"Trainable prefix(es) matched no parameters: {missing_trainable}")
+            if missing_frozen:
+                raise ValueError(f"Frozen prefix(es) matched no parameters: {missing_frozen}")
 
         # 打印结果检查
         trainable = [n for n, p in self.agent.named_parameters() if p.requires_grad]
-        print(f"Train profile: {train_profile} (inj_mode={inj_mode}, pooling={pooling})")
+        print(f"Trainable groups: {trainable_groups}")
+        print(f"Trainable prefixes: {trainable_prefixes}")
+        print(f"Frozen prefixes: {frozen_prefixes}")
         print(f"Total trainable params: {len(trainable)}")
-        if os.getenv('WOTE_PRINT_TRAINABLE', '0') == '1':
+        print_trainable = bool(getattr(self.agent.config, "print_trainable", False)) or os.getenv('WOTE_PRINT_TRAINABLE', '0') == '1'
+        if print_trainable:
             print("Trainable params:")
             for n in trainable:
                 print("   ", n)

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 
 from nuplan.common.maps.abstract_map import SemanticMapLayer
@@ -161,15 +161,38 @@ class WoTEConfig:
     max_epochs = 100
     
     # loss weight
+    use_agent_loss: bool = False
     traj_offset_loss_weight: float = 1.0
     offset_im_reward_weight: float = 0.1
     im_loss_weight: float = 1.0
     metric_loss_weight: float = 1.0
+
+    # training freeze policy
+    freeze_all: bool = True
+    trainable_groups: List[str] = field(default_factory=list)
+    trainable_prefixes: List[str] = field(default_factory=list)
+    frozen_prefixes: List[str] = field(default_factory=lambda: [
+        "WoTE_model._backbone",
+        "WoTE_model.scene_position_embedding",
+        "WoTE_model.encode_ego_feat_mlp",
+    ])
+    freeze_strict: bool = True
+    print_trainable: bool = False
     
-    # controller bank 只服务 BEV latent world model；不直接替换 planner 候选轨迹。
-    # 如果 exec 路径是 .npz bundle，模型会优先读取 bundle 内部的 ref_traj。
-    controller_ref_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/Anchors_Original_256_centered.npy"
-    controller_exec_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/controller_styles_256.npz"
+    # Controller style observations are independent from the planner candidate set.
+    # They can contain any number of paired reference/executed trajectories.
+    controller_style_ref_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/ref_trajs/Anchors_Original_1024_centered.npy"
+    controller_style_exec_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/1024/controller_styles_1024.npz"
+
+    # Candidate executions are fixed and index-aligned with cluster_file_path.
+    # For the WoTE planner both must contain exactly num_traj_anchor trajectories.
+    controller_candidate_exec_bank_path: str = "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/controller_styles_256.npz"
+    controller_candidate_alignment_atol: float = 1e-4
+
+    # Deprecated aliases retained for older Hydra configs. New YAML files should
+    # always set the explicit style/candidate fields above.
+    controller_ref_bank_path: Optional[str] = None
+    controller_exec_bank_path: Optional[str] = None
     
     
     #自己新增： learning rate floor and warmup epochs for cosine scheduler
@@ -185,3 +208,11 @@ class WoTEConfig:
     controller_wm_first_step_only: bool = False  # 是否只在 world model 第一步注入 controller 信息。
     controller_wm_attn_heads: int = 8  # controller 信息注入 world model 时 cross-attention 的 head 数。
     controller_feature_mode: str = "full"  # "full" 或 "lateral_only"：ControllerEmbedding 从 ref/exec 轨迹中提取的特征范围。
+
+    # optional training-time feature switches
+    herm_enable: bool = False
+    herm_apply_in_train: bool = False
+    herm_apply_in_eval: bool = False
+    use_offset_candidates_in_train: bool = False
+    use_scored_candidates_for_fut_bev_target: bool = False
+    use_scored_candidates_for_im_loss: bool = False

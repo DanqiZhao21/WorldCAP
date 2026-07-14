@@ -1,28 +1,32 @@
 _target_: navsim.agents.WoTE.WoTE_agent.WoTEAgent
-_convert_: 'all'
+_convert_: all
 
 config:
   _target_: navsim.agents.WoTE.configs.default.WoTEConfig
-  _convert_: 'all'
+  _convert_: all
   min_lr: 1e-6
   warmup_epochs: 3
 
-  # WorldCAP 主线：controller bank 只进入 BEV latent world model，不直接改候选轨迹或 imitation label。
-  controller_ref_bank_path: "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/Anchors_Original_256_centered.npy"
-  controller_exec_bank_path: "/home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/controller_styles_256.npz"
+  # The 1024-reference style bank only conditions the latent world model.
+  controller_style_ref_bank_path: /home/zhaodanqi/clone/WoTE/CtrlNew/controller/ref_trajs/Anchors_Original_1024_centered.npy
+  controller_style_exec_bank_path: /home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/1024/controller_styles_1024.npz
+
+  # Candidate executions remain index-aligned with the 256 planner anchors.
+  controller_candidate_exec_bank_path: /home/zhaodanqi/clone/WoTE/CtrlNew/controller/bundles/256/controller_styles_256.npz
+  controller_candidate_alignment_atol: 1e-4
+
   use_controller_wm: true
   controller_wm_fusion: attn_film
-  controller_wm_token_scope: all            # all/ego：controller token 调制所有 world-model token，还是只调制 ego token。
-  controller_wm_first_step_only: false      # 是否只在 world model 第一步注入 controller 信息。
-  controller_wm_attn_heads: 8               # controller 注入 world model 时 cross-attention 的 head 数。
-  controller_feature_mode: full             # full/lateral_only：ControllerEmbedding 使用的 controller 轨迹特征范围。
+  controller_wm_token_scope: all
+  controller_wm_first_step_only: false
+  controller_wm_attn_heads: 8
+  controller_feature_mode: full
 
 trajectory_sampling:
   _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
-  _convert_: 'all'
+  _convert_: all
   time_horizon: 4
   interval_length: 0.5
 
 checkpoint_path: null
-# lr: 1e-4
 lr: 1e-6

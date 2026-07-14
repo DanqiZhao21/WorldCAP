@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 import numpy as np
 
 
-ROOT = Path(__file__).resolve().parents[2]
-LEGACY_SCRIPT = ROOT / "ControllerExp/scripts/genTest.py"
+ROOT = Path(__file__).resolve().parents[5]
+LEGACY_SCRIPT = Path(__file__).with_name("genTest.py")
 
 
 def _load_legacy_module():

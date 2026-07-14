@@ -1,0 +1,73 @@
+run:
+  name: futbev_only_controller_reward
+  root: /home/zhaodanqi/clone/WoTE
+  python: python
+  gpu_ids: "0,1,2,3,5,6"
+  devices: 6
+  exp_root: /mnt/data/navsim_workspace/exp
+  wandb_project: WOTE-training-2
+  tags: [FutbevLoss, CtrlEmb-LatWM]
+
+data:
+  split: trainval
+  scene_filter: navtrain
+  cache_path: ${run.exp_root}/training_cache_allWoteTarget_0114
+  use_cache_without_dataset: true
+  planner_anchors: ${run.root}/extra_data/planning_vb/trajectory_anchors_256.npy
+
+model:
+  init_ckpt: ${run.root}/tool/epoch=29-step=19950.ckpt
+
+  controller:
+    # Style observations condition the world model; candidate executions stay
+    # index-aligned with the 256 planner anchors used for rollout.
+    style_ref_path: ${run.root}/CtrlNew/controller/ref_trajs/Anchors_Original_1024_centered.npy
+    style_exec_path: ${run.root}/CtrlNew/controller/bundles/1024/controller_styles_1024.npz
+    candidate_exec_path: ${run.root}/CtrlNew/controller/bundles/256/controller_styles_256.npz
+    style_split: train
+    use_world_model: true
+    fusion: attn_film
+    token_scope: all
+    first_step_only: false
+    feature_mode: full
+
+  switches:
+    herm_enable: false
+    herm_apply_in_train: false
+    herm_apply_in_eval: false
+    use_offset_candidates_in_train: false
+    use_scored_candidates_for_fut_bev_target: false
+    use_scored_candidates_for_im_loss: false
+
+train:
+  freeze:
+    freeze_all: true
+    trainable_groups:
+      - controller_embedding
+      - latent_world_model
+      # - reward_heads
+    frozen_prefixes:
+      - WoTE_model._backbone
+      - WoTE_model.scene_position_embedding
+      - WoTE_model.encode_ego_feat_mlp
+    strict: true
+    print_trainable: true
+
+  losses:
+    agent: false
+    current_bev: 0.0
+    future_bev: 1.0
+    traj_offset: 0.0
+    offset_im_reward: 0.0
+    imitation_reward: 1.0
+    metric_reward: 0.0
+
+  optimizer:
+    batch_size: 16
+    num_workers: 2
+    max_epochs: 32
+    lr: 1e-4
+    min_lr: 1e-6
+    warmup_epochs: 3
+    precision: 16-mixed
+    strategy: ddp

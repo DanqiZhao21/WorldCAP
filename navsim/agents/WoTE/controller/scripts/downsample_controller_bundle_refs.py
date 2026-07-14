@@ -2,7 +2,7 @@
 """Downsample reference trajectories in a controller bundle .npz.
 
 Use case:
-  Starting from the original 256-ref bundle (ControllerExp/generated/controller_styles.npz),
+  Starting from the canonical 256-ref bundle (CtrlNew/controller/bundles/256/controller_styles_256.npz),
   create 128/64-ref variants by uniformly subsampling the reference index dimension.
 
 The bundle is expected to contain at least:
@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--src",
         required=True,
-        help="Source controller bundle .npz (e.g. ControllerExp/generated/controller_styles.npz)",
+        help="Source controller bundle .npz (for example CtrlNew/controller/bundles/256/controller_styles_256.npz)",
     )
     p.add_argument(
         "--dst",

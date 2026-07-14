@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from tqdm import tqdm
 
 # ===== setup PYTHONPATH =====
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[5]
 NUPLAN_DIR = ROOT / 'nuplan-devkit'
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(NUPLAN_DIR))
@@ -399,7 +399,7 @@ def split_train_val(specs: List[StyleSpec]) -> tuple[np.ndarray, np.ndarray]:
 
 # ===== MAIN SIMULATION =====
 def main():
-    anchors_path = ROOT / "ControllerExp/Anchors_Original_1024_centered.npy"
+    anchors_path = ROOT / "CtrlNew/controller/ref_trajs/Anchors_Original_1024_centered.npy"
     ref_anchors = np.load(str(anchors_path))
     print(f"[INFO] loaded anchors from {anchors_path}, shape={ref_anchors.shape}")
     # normalize anchors to 41 if needed
@@ -413,6 +413,8 @@ def main():
     
     # num_poses = ref_anchors.shape[1]
     # proposal_sampling = TrajectorySampling(num_poses=num_poses, interval_length=0.1)
+
+    proposal_sampling = TrajectorySampling(time_horizon=4.0, interval_length=0.1)
 
     # initial state (shared)
     initial_state = ego_from_anchor_pair(ref_anchors[0, 0, :3], ref_anchors[0, 1, :3])
@@ -468,9 +470,9 @@ def main():
     group_sub_arr = np.array([s.group_sub for s in specs], dtype=object)
 
     # save
-    out_dir = ROOT / "ControllerExp/generated"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = ROOT / "CtrlNew/controller/bundles"
     out_path = out_dir / "1024" / "controller_styles_1024.npz"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(out_path,
              exec_trajs=all_execs,
              ref_traj=downsample(ref_anchors),
@@ -490,7 +492,7 @@ def main():
 
 
 def main_debug():
-    anchors_path = ROOT / "ControllerExp/Anchors_Original_64_centered.npy"
+    anchors_path = ROOT / "CtrlNew/controller/ref_trajs/Anchors_Original_64_centered.npy"
     ref_anchors = np.load(str(anchors_path))
     print(f"[INFO] loaded anchors from {anchors_path}, shape={ref_anchors.shape}")
     if ref_anchors.shape[1] != 41:
@@ -522,7 +524,7 @@ def main_debug():
     print(f"[DEBUG] exec_8 shape: {exec_8.shape}")
 
     # 保存或者打印检查
-    out_dir = ROOT / "ControllerExp/generated"
+    out_dir = ROOT / "CtrlNew/controller/bundles/64"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "debug_default_none1024.npy"
     np.save(out_path, exec_8)
