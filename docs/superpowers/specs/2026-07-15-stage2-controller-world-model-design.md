@@ -43,6 +43,14 @@ The active controller support bank must contain matching reference and
 execution tensors with shape `[S, 41, 3]`. The ControllerEncoder receives them
 as `[1, S, 41, 3]` and returns one style embedding with shape `[1, 64]`.
 
+The existing candidate bundle cannot be reused: it contains 213 legacy styles,
+while the Stage-1 dense support bundle contains 105 structured styles. Stage 2
+will generate a new candidate bundle from the 256 planner anchors with the same
+structured style seed and parameter builder used by Stage 1. The new bundle
+will contain `[105, 256, 8, 3]` executed candidates. Its `style_names` must
+match the dense support bundle exactly and in order before either bundle is
+accepted by WoTE.
+
 ## Model Architecture
 
 WoTE will instantiate the Stage-1 `ControllerEncoder` directly from the
@@ -87,7 +95,8 @@ active ref/exec support bank [S, 41, 3]
 ```
 
 The support bank remains separate from the 256 candidate execution trajectories.
-Candidate execution alignment and world-model rollout behavior are unchanged.
+Candidate execution alignment and world-model rollout behavior are unchanged,
+but the candidate data source changes to the new 105-style structured bundle.
 
 Because the active bank is controller-specific but not scene-specific, the
 implementation may compute one style-token set and broadcast it across the
